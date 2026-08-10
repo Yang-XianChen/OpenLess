@@ -22,7 +22,7 @@ jobs:
       - name: Download APK artifacts from existing run
         uses: actions/download-artifact@v4
         with:
-          run_id: ${{ github.event.inputs.run_id }}
+          run-id: ${{ github.event.inputs.run_id }}
           path: apks
 
       - name: Collect APK files
