@@ -117,7 +117,14 @@ jobs:
 
       - name: Build Android debug APKs
         working-directory: openless-all/app
-        run: npm run tauri:android:build:debug
+        env:
+          ONLY_ARM64: ${{ github.event.inputs.only_arm64 }}
+        run: |
+          if [ "$ONLY_ARM64" = "true" ]; then
+            npm run tauri -- android build --apk --debug --target aarch64 --split-per-abi
+          else
+            npm run tauri:android:build:debug
+          fi
 
       - name: Collect split APKs
         id: apk
