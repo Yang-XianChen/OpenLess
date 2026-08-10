@@ -11,21 +11,19 @@
 //! 电脑端优先通过 fcitx5 `CommitText` 插入光标（Wayland 可用）。
 //!
 //! fcitx5 通道下会在输入法候选/提示区显示状态：
-//! 正在录音 → 正在转录 → 完成清除；连接失败会显示失败提示并自动重试一次。
+//! 正在录音 → 正在转录 → 完成清除；连接失败会立即显示提示并在数秒后自动消失。
 
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::net::IpAddr;
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use serde_json::json;
-use tungstenite::{connect, Message};
+use tungstenite::Message;
 
-type ClientSocket =
-    tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
+type ClientSocket = tungstenite::WebSocket<std::net::TcpStream>;
 
 static SESSION: OnceLock<Mutex<Option<ClientSocket>>> = OnceLock::new();
 static DISCOVERED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -33,9 +31,12 @@ static DISCOVERED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 const DEFAULT_PORT: u16 = 45678;
 const AUX_RECORDING: &str = "🎤 正在录音…";
 const AUX_TRANSCRIBING: &str = "⏳ 正在转录…";
-const AUX_SEARCHING: &str = "🔍 正在搜索手机…";
 const AUX_RETRY: &str = "连接失败，正在重试…";
-const AUX_FAILED: &str = "❌ 连接失败";
+const ERR_NO_DEVICE: &str = "未连接手机：请确认手机端 OpenLess 已运行，等待后台扫描发现设备";
+const SCAN_INTERVAL: Duration = Duration::from_secs(15);
+const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
+const PROBE_READ_TIMEOUT: Duration = Duration::from_millis(1200);
+const SESSION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Parser, Debug)]
 #[command(name = "openless-remote-client", about = "Headless OpenLess Android LAN dictation client")]
@@ -66,88 +67,11 @@ fn main() {
     let _ = SESSION.set(Mutex::new(None));
     let _ = DISCOVERED.set(Mutex::new(None));
 
-    if args.fcitx {
-        run_fcitx(args.address.clone(), args.auto_discover, args.toggle);
-    }
-
-    let hotkey = match parse_hotkey(&args.hotkey) {
-        Ok(hotkey) => hotkey,
-        Err(error) => {
-            eprintln!("[remote] invalid hotkey {:?}: {error}", args.hotkey);
-            std::process::exit(1);
-        }
-    };
-
-    let manager = match GlobalHotKeyManager::new() {
-        Ok(manager) => manager,
-        Err(error) => {
-            eprintln!("[remote] failed to init global hotkey: {error}");
-            std::process::exit(1);
-        }
-    };
-    if let Err(error) = manager.register(hotkey) {
-        eprintln!("[remote] failed to register hotkey {}: {error}", args.hotkey);
+    if !args.fcitx {
+        eprintln!("[remote] 此构建仅支持 fcitx5 通道（Wayland 下请加 --fcitx）");
         std::process::exit(1);
     }
-
-    let mut recording = false;
-    let mut session_address: Option<String> = None;
-    println!(
-        "[remote] listening {} ({})",
-        args.hotkey,
-        if args.toggle { "toggle" } else { "hold to talk" }
-    );
-
-    let receiver = GlobalHotKeyEvent::receiver();
-    loop {
-        let event = match receiver.recv() {
-            Ok(event) => event,
-            Err(error) => {
-                eprintln!("[remote] hotkey event channel closed: {error}");
-                break;
-            }
-        };
-        if event.id() != hotkey.id() {
-            continue;
-        }
-        match event.state() {
-            HotKeyState::Pressed => {
-                println!("[remote] hotkey pressed");
-                if args.toggle {
-                    if recording {
-                        recording = false;
-                        if let Some(address) = session_address.take() {
-                            stop_flow(&address);
-                        }
-                    } else if !recording {
-                        match start_flow(args.address.as_deref(), args.auto_discover) {
-                            Ok(address) => {
-                                session_address = Some(address);
-                                recording = true;
-                            }
-                            Err(error) => eprintln!("[remote] start failed: {error}"),
-                        }
-                    }
-                } else if !recording {
-                    match start_flow(args.address.as_deref(), args.auto_discover) {
-                        Ok(address) => {
-                            session_address = Some(address);
-                            recording = true;
-                        }
-                        Err(error) => eprintln!("[remote] start failed: {error}"),
-                    }
-                }
-            }
-            HotKeyState::Released => {
-                if !args.toggle && recording {
-                    recording = false;
-                    if let Some(address) = session_address.take() {
-                        stop_flow(&address);
-                    }
-                }
-            }
-        }
-    }
+    run_fcitx(args.address.clone(), args.auto_discover, args.toggle);
 }
 
 // ───────────────────────── fcitx5 通道 ─────────────────────────
@@ -211,6 +135,9 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool) -> ! {
     }
 
     println!("[remote] fcitx5 Right Alt active ({})", if toggle { "toggle" } else { "hold to talk" });
+    if auto_discover {
+        start_background_scanner();
+    }
     let mut recording = false;
     let mut session_address: Option<String> = None;
     loop {
@@ -286,25 +213,23 @@ fn set_hotkey_raw(
 // ───────────────────────── 会话控制 ─────────────────────────
 
 fn start_flow(address: Option<&str>, auto_discover: bool) -> Result<String, String> {
-    let _ = set_aux_down(AUX_RECORDING);
+    let resolved = match resolve_address(address, auto_discover) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            flash_aux(&format!("❌ {error}"));
+            return Err(error);
+        }
+    };
+
     let mut last_error = "未连接".to_string();
     for attempt in 0..2 {
-        let resolved = match resolve_address(address, auto_discover) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                last_error = error;
-                if attempt == 0 {
-                    let _ = set_aux_down(AUX_SEARCHING);
-                }
-                continue;
-            }
-        };
         println!("[remote] connecting {resolved} (attempt {})", attempt + 1);
         match start_session(&resolved) {
             Ok(()) => {
                 if let Some(cache) = DISCOVERED.get() {
                     *cache.lock().unwrap() = Some(resolved.clone());
                 }
+                let _ = set_aux_down(AUX_RECORDING);
                 return Ok(resolved);
             }
             Err(error) => {
@@ -315,7 +240,14 @@ fn start_flow(address: Option<&str>, auto_discover: bool) -> Result<String, Stri
             }
         }
     }
-    flash_aux(AUX_FAILED);
+
+    if let Some(cache) = DISCOVERED.get() {
+        let mut guard = cache.lock().unwrap();
+        if guard.as_deref() == Some(resolved.as_str()) {
+            *guard = None;
+        }
+    }
+    flash_aux(&format!("❌ 连接失败：{last_error}"));
     Err(last_error)
 }
 
@@ -345,27 +277,103 @@ fn resolve_address(address: Option<&str>, auto_discover: bool) -> Result<String,
                 return Ok(found);
             }
         }
-        match discover_phone(DEFAULT_PORT) {
-            Some(found) => {
-                if let Some(cache) = DISCOVERED.get() {
-                    *cache.lock().unwrap() = Some(found.clone());
-                }
-                Ok(found)
-            }
-            None => Err("未发现手机设备".to_string()),
-        }
+        Err(ERR_NO_DEVICE.to_string())
     } else {
         Err("未配置手机地址（--address 或 --auto-discover）".to_string())
     }
 }
 
-/// 扫描本机局域网 /24 网段里监听指定端口并能回复 OpenLess ping 的设备。
+/// 后台持续扫描局域网手机并缓存结果；按热键时直接用缓存，不阻塞提示区。
+fn start_background_scanner() {
+    std::thread::spawn(|| {
+        let mut last: Option<String> = None;
+        loop {
+            if let Some(session) = SESSION.get() {
+                if session.lock().unwrap().is_some() {
+                    std::thread::sleep(SCAN_INTERVAL);
+                    continue;
+                }
+            }
+            let found = discover_phone(DEFAULT_PORT);
+            if found != last {
+                match &found {
+                    Some(found) => println!("[remote] background discovery: {found}"),
+                    None => println!("[remote] background discovery: no phone found"),
+                }
+                last = found.clone();
+            }
+            if let Some(cache) = DISCOVERED.get() {
+                *cache.lock().unwrap() = found.clone();
+            }
+            std::thread::sleep(SCAN_INTERVAL);
+        }
+    });
+}
+
+/// 扫描本机局域网私有网段里监听指定端口并能回复 OpenLess ping 的设备。
+/// 每个探测都带显式连接/读取超时，且任意一个 pong 命中即立即返回，
+/// 不再等待所有探测线程结束。
 fn discover_phone(port: u16) -> Option<String> {
+    let prefixes = local_private_prefixes();
+    if prefixes.is_empty() {
+        return None;
+    }
+
+    let found = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel::<String>();
+    for prefix in prefixes {
+        for host in 1..=254 {
+            let tx = tx.clone();
+            let found = Arc::clone(&found);
+            let host = format!("{prefix}.{host}");
+            std::thread::spawn(move || {
+                if found.load(Ordering::Relaxed) {
+                    return;
+                }
+                probe_phone(&host, port, &tx, &found);
+            });
+        }
+    }
+    rx.recv_timeout(Duration::from_secs(10)).ok()
+}
+
+fn probe_phone(host: &str, port: u16, tx: &mpsc::Sender<String>, found: &AtomicBool) {
+    let address = match format!("{host}:{port}").parse::<SocketAddr>() {
+        Ok(address) => address,
+        Err(_) => return,
+    };
+    let tcp = match std::net::TcpStream::connect_timeout(&address, PROBE_CONNECT_TIMEOUT) {
+        Ok(tcp) => tcp,
+        Err(_) => return,
+    };
+    let _ = tcp.set_read_timeout(Some(PROBE_READ_TIMEOUT));
+    let _ = tcp.set_nodelay(true);
+    let (mut socket, _) = match tungstenite::client::client(format!("ws://{address}"), tcp) {
+        Ok(socket) => socket,
+        Err(_) => return,
+    };
+    if socket
+        .send(Message::Text(json!({ "type": "ping" }).to_string().into()))
+        .is_err()
+    {
+        return;
+    }
+    if let Ok(Message::Text(text)) = socket.read() {
+        if text.contains("\"pong\"") && !found.swap(true, Ordering::Relaxed) {
+            let _ = tx.send(format!("{address}"));
+        }
+    }
+}
+
+fn local_private_prefixes() -> Vec<String> {
     let mut prefixes = Vec::new();
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        for (_name, ip) in interfaces {
+        for (name, ip) in interfaces {
             if let IpAddr::V4(v4) = ip {
                 if v4.is_loopback() || v4.is_link_local() {
+                    continue;
+                }
+                if !interface_up(&name) {
                     continue;
                 }
                 let octets = v4.octets();
@@ -378,39 +386,35 @@ fn discover_phone(port: u16) -> Option<String> {
             }
         }
     }
-    if prefixes.is_empty() {
-        return None;
-    }
+    prefixes.sort();
+    prefixes.dedup();
+    prefixes
+}
 
-    let (tx, rx) = mpsc::channel::<String>();
-    std::thread::scope(|scope| {
-        for prefix in prefixes {
-            for host in 1..=254 {
-                let tx = tx.clone();
-                let prefix = prefix.clone();
-                let url = format!("ws://{prefix}.{host}:{port}");
-                scope.spawn(move || {
-                    if let Ok((mut socket, _)) = connect(&url) {
-                        if let tungstenite::stream::MaybeTlsStream::Plain(tcp) = socket.get_ref() {
-                            let _ = tcp.set_read_timeout(Some(Duration::from_millis(1200)));
-                        }
-                        let _ = socket.send(Message::Text(json!({"type":"ping"}).to_string().into()));
-                        if let Ok(Message::Text(text)) = socket.read() {
-                            if text.contains("\"pong\"") {
-                                let _ = tx.send(format!("{prefix}.{host}:{port}"));
-                            }
-                        }
-                    }
-                });
-            }
-        }
-        rx.recv_timeout(Duration::from_secs(10)).ok()
-    })
+/// Linux 下只扫描状态为 up 的接口（跳过 docker0 等未启用的网桥）。
+#[cfg(target_os = "linux")]
+fn interface_up(name: &str) -> bool {
+    std::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+        .map(|state| state.trim() == "up")
+        .unwrap_or(true)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn interface_up(_name: &str) -> bool {
+    true
 }
 
 fn start_session(address: &str) -> Result<(), String> {
     let url = format!("ws://{address}");
-    let (mut socket, _response) = connect(&url).map_err(|e| format!("connect {url}: {e}"))?;
+    let socket_addr = address
+        .parse::<SocketAddr>()
+        .map_err(|e| format!("bad address {address}: {e}"))?;
+    let tcp = std::net::TcpStream::connect_timeout(&socket_addr, PROBE_CONNECT_TIMEOUT)
+        .map_err(|e| format!("connect {url}: {e}"))?;
+    let _ = tcp.set_read_timeout(Some(SESSION_READ_TIMEOUT));
+    let _ = tcp.set_nodelay(true);
+    let (mut socket, _response) = tungstenite::client::client(&url, tcp)
+        .map_err(|e| format!("handshake {url}: {e}"))?;
     send_json(
         &mut socket,
         json!({ "type": "start", "translation": false }),
@@ -443,9 +447,16 @@ fn stop_session(address: &str) -> Result<(), String> {
         if Instant::now() >= deadline {
             return Err("timed out waiting for phone result".to_string());
         }
-        let frame = socket
-            .read()
-            .map_err(|e| format!("read from {address}: {e}"))?;
+        let frame = match socket.read() {
+            Ok(frame) => frame,
+            Err(error) if is_read_timeout(&error) => {
+                if Instant::now() >= deadline {
+                    return Err("timed out waiting for phone result".to_string());
+                }
+                continue;
+            }
+            Err(error) => return Err(format!("read from {address}: {error}")),
+        };
         match frame {
             Message::Text(text) => {
                 let value: serde_json::Value = serde_json::from_str(text.as_str())
@@ -471,6 +482,17 @@ fn stop_session(address: &str) -> Result<(), String> {
             Message::Close(_) => return Err("phone closed connection before result".to_string()),
             _ => {}
         }
+    }
+}
+
+/// 判断错误是否来自 socket 读超时（用于在截止时间内继续等待）。
+fn is_read_timeout(error: &tungstenite::Error) -> bool {
+    match error {
+        tungstenite::Error::Io(io) => {
+            io.kind() == std::io::ErrorKind::WouldBlock
+                || io.kind() == std::io::ErrorKind::TimedOut
+        }
+        _ => false,
     }
 }
 
@@ -526,43 +548,11 @@ fn insert_text(text: &str) -> Result<(), String> {
     clipboard
         .set_text(text.to_string())
         .map_err(|e| format!("clipboard set: {e}"))?;
-
-    use enigo::{Direction, Enigo, Keyboard, Settings};
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo: {e}"))?;
-
-    #[cfg(target_os = "macos")]
-    let (modifiers, primary) = (vec![enigo::Key::Meta], enigo::Key::Unicode('v'));
-    #[cfg(not(target_os = "macos"))]
-    let (modifiers, primary) = (vec![enigo::Key::Control], enigo::Key::Unicode('v'));
-
-    let mut pressed = 0usize;
-    let mut first_error: Option<String> = None;
-    for modifier in &modifiers {
-        if let Err(error) = enigo.key(*modifier, Direction::Press) {
-            first_error = Some(error.to_string());
-            break;
-        }
-        pressed += 1;
-    }
-    if first_error.is_none() {
-        if let Err(error) = enigo.key(primary, Direction::Click) {
-            first_error = Some(error.to_string());
-        }
-    }
-    for modifier in modifiers[..pressed].iter().rev() {
-        if let Err(error) = enigo.key(*modifier, Direction::Release) {
-            if first_error.is_none() {
-                first_error = Some(error.to_string());
-            }
-        }
-    }
-    match first_error {
-        Some(error) => Err(format!("paste simulation failed: {error}")),
-        None => {
-            println!("[remote] inserted {} chars", text.chars().count());
-            Ok(())
-        }
-    }
+    println!(
+        "[remote] fcitx5 提交失败，{} 字已复制到剪贴板（Wayland 下可手动粘贴）",
+        text.chars().count()
+    );
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -613,100 +603,4 @@ fn flash_aux(text: &str) {
     let _ = set_aux_down(text);
     std::thread::sleep(Duration::from_secs(3));
     let _ = clear_aux_down();
-}
-
-// ───────────────────────── 热键解析 ─────────────────────────
-
-fn parse_hotkey(raw: &str) -> Result<HotKey, String> {
-    let mut modifiers = Modifiers::empty();
-    let mut code: Option<Code> = None;
-    for part in raw.split('+').map(str::trim) {
-        let lower = part.to_ascii_lowercase();
-        match lower.as_str() {
-            "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
-            "alt" | "option" | "opt" => modifiers |= Modifiers::ALT,
-            "shift" => modifiers |= Modifiers::SHIFT,
-            "super" | "cmd" | "command" | "meta" | "win" => modifiers |= Modifiers::SUPER,
-            "rightalt" | "altright" | "ralt" | "右alt" => code = Some(Code::AltRight),
-            "leftalt" | "altleft" | "lalt" | "左alt" => code = Some(Code::AltLeft),
-            "space" => code = Some(Code::Space),
-            "enter" | "return" => code = Some(Code::Enter),
-            "tab" => code = Some(Code::Tab),
-            "esc" | "escape" => code = Some(Code::Escape),
-            "f1" => code = Some(Code::F1),
-            "f2" => code = Some(Code::F2),
-            "f3" => code = Some(Code::F3),
-            "f4" => code = Some(Code::F4),
-            "f5" => code = Some(Code::F5),
-            "f6" => code = Some(Code::F6),
-            "f7" => code = Some(Code::F7),
-            "f8" => code = Some(Code::F8),
-            "f9" => code = Some(Code::F9),
-            "f10" => code = Some(Code::F10),
-            "f11" => code = Some(Code::F11),
-            "f12" => code = Some(Code::F12),
-            single if single.chars().count() == 1 => {
-                code = Some(char_to_code(single.chars().next().unwrap())?);
-            }
-            other => return Err(format!("unsupported key: {other}")),
-        }
-    }
-    let code = code.ok_or_else(|| "hotkey needs a main key".to_string())?;
-    Ok(HotKey::new(Some(modifiers), code))
-}
-
-fn char_to_code(ch: char) -> Result<Code, String> {
-    let upper = ch.to_ascii_uppercase();
-    let code = match upper {
-        'A' => Code::KeyA,
-        'B' => Code::KeyB,
-        'C' => Code::KeyC,
-        'D' => Code::KeyD,
-        'E' => Code::KeyE,
-        'F' => Code::KeyF,
-        'G' => Code::KeyG,
-        'H' => Code::KeyH,
-        'I' => Code::KeyI,
-        'J' => Code::KeyJ,
-        'K' => Code::KeyK,
-        'L' => Code::KeyL,
-        'M' => Code::KeyM,
-        'N' => Code::KeyN,
-        'O' => Code::KeyO,
-        'P' => Code::KeyP,
-        'Q' => Code::KeyQ,
-        'R' => Code::KeyR,
-        'S' => Code::KeyS,
-        'T' => Code::KeyT,
-        'U' => Code::KeyU,
-        'V' => Code::KeyV,
-        'W' => Code::KeyW,
-        'X' => Code::KeyX,
-        'Y' => Code::KeyY,
-        'Z' => Code::KeyZ,
-        '0' => Code::Digit0,
-        '1' => Code::Digit1,
-        '2' => Code::Digit2,
-        '3' => Code::Digit3,
-        '4' => Code::Digit4,
-        '5' => Code::Digit5,
-        '6' => Code::Digit6,
-        '7' => Code::Digit7,
-        '8' => Code::Digit8,
-        '9' => Code::Digit9,
-        ';' | ':' => Code::Semicolon,
-        ',' | '<' => Code::Comma,
-        '.' | '>' => Code::Period,
-        '/' | '?' => Code::Slash,
-        '\\' | '|' => Code::Backslash,
-        '[' | '{' => Code::BracketLeft,
-        ']' | '}' => Code::BracketRight,
-        '\'' | '"' => Code::Quote,
-        '`' | '~' => Code::Backquote,
-        '-' | '_' => Code::Minus,
-        '=' | '+' => Code::Equal,
-        ' ' => Code::Space,
-        other => return Err(format!("unsupported main key: {other}")),
-    };
-    Ok(code)
 }

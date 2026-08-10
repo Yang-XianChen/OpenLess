@@ -26,10 +26,13 @@
 //! - `{"type":"error","message":"..."}`
 //! - `{"type":"pong"}`
 //!
+//! 多客户端：允许多个桌面客户端同时连接；同一时刻只有一个客户端能持有
+//! 活跃听写会话，其他客户端发起 `start` 会收到“连接已被阻塞”错误。
+//!
 //! 安全说明：这是局域网 PoC，未做认证；请仅在可信网络使用。
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -71,12 +74,17 @@ pub fn start(coordinator: Arc<Coordinator>) {
             }
         };
         log::info!("[lan-remote] listening on 0.0.0.0:{DEFAULT_PORT}");
+        // 全局会话占用表：同一时刻只允许一个桌面客户端持有活跃听写会话。
+        let registry = Arc::new(StdMutex::new(None::<SocketAddr>));
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
                     let coordinator = Arc::clone(&coordinator);
+                    let registry = Arc::clone(&registry);
                     tauri::async_runtime::spawn(async move {
-                        if let Err(error) = handle_connection(stream, addr, coordinator).await {
+                        if let Err(error) =
+                            handle_connection(stream, addr, coordinator, registry).await
+                        {
                             log::warn!("[lan-remote] connection {addr} ended: {error}");
                         }
                     });
@@ -94,6 +102,7 @@ async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
     coordinator: Arc<Coordinator>,
+    registry: Arc<StdMutex<Option<SocketAddr>>>,
 ) -> Result<(), String> {
     let mut ws = tokio_tungstenite::accept_async(stream)
         .await
@@ -121,6 +130,25 @@ async fn handle_connection(
                     "start" => {
                         if session.is_some() {
                             send_json(&mut ws, error_msg("session already active")).await?;
+                            continue;
+                        }
+                        let blocked = {
+                            let mut owner = registry.lock().unwrap();
+                            match *owner {
+                                Some(current) if current != addr => true,
+                                None => {
+                                    *owner = Some(addr);
+                                    false
+                                }
+                                _ => false,
+                            }
+                        };
+                        if blocked {
+                            send_json(
+                                &mut ws,
+                                error_msg("连接已被阻塞：另一个桌面客户端正在使用当前会话"),
+                            )
+                            .await?;
                             continue;
                         }
                         if let Err(error) = crate::android::native_bridge::promote_remote_recording()
@@ -153,6 +181,7 @@ async fn handle_connection(
                             send_json(&mut ws, error_msg("no active session")).await?;
                             continue;
                         };
+                        release_owner(&registry, addr);
                         coordinator.set_remote_capture_mode(true);
                         let stop_result = if active.translation {
                             coordinator.stop_dictation_with_translation(true).await
@@ -190,6 +219,7 @@ async fn handle_connection(
                         send_json(&mut ws, serde_json::json!({ "type": "stopped" })).await?;
                     }
                     "cancel" => {
+                        release_owner(&registry, addr);
                         coordinator.cancel_dictation();
                         coordinator.set_remote_capture_mode(false);
                         send_json(&mut ws, serde_json::json!({ "type": "cancelled" })).await?;
@@ -215,8 +245,17 @@ async fn handle_connection(
     }
 
     coordinator.set_remote_capture_mode(false);
+    release_owner(&registry, addr);
     log::info!("[lan-remote] disconnected: {addr}");
     Ok(())
+}
+
+/// 释放该连接持有的全局会话占用（仅当占用者确实是该连接时）。
+fn release_owner(registry: &StdMutex<Option<SocketAddr>>, addr: SocketAddr) {
+    let mut owner = registry.lock().unwrap();
+    if *owner == Some(addr) {
+        *owner = None;
+    }
 }
 
 fn error_msg(message: &str) -> serde_json::Value {
