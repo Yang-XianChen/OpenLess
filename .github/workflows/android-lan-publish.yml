@@ -7,10 +7,10 @@ on:
         description: "Git tag / release name (rerun with same tag replaces the release)"
         required: false
         default: android-lan-preview
-      run_id:
-        description: "Workflow run id that produced the debug APK artifacts"
+      artifact_ids:
+        description: "Comma-separated artifact ids to publish (default: all four debug ABIs)"
         required: false
-        default: "31393556434"
+        default: "9065147274,9065142390,9065138206,9065134388"
 
 permissions:
   contents: write
@@ -23,7 +23,7 @@ jobs:
       - name: Download APK artifacts from existing run
         uses: actions/download-artifact@v4
         with:
-          run-id: ${{ github.event.inputs.run_id }}
+          artifact-ids: ${{ github.event.inputs.artifact_ids }}
           path: apks
 
       - name: Collect APK files
