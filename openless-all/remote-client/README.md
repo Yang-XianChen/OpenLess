@@ -1,6 +1,8 @@
 # OpenLess Remote Client（极简无界面电脑端）
 
-电脑端按住热键 → 手机 OpenLess 录音并处理 → 松开热键 → 手机回传最终文本 → 电脑自动粘贴到当前光标。
+电脑端触发热键 → 手机 OpenLess 录音并处理 → 再次触发结束 → 手机回传最终文本 → 电脑自动粘贴到当前光标。
+
+默认 `--toggle` 为切换模式：按一下开始、再按一下结束。不传 `--toggle` 时为按住说话模式。
 
 ## 构建
 
@@ -15,13 +17,15 @@ cargo build --release
 
 ```bash
 ./openless-remote-client --address 192.168.1.20:45678 \
-  --hotkey "Ctrl+Shift+Space"
+  --hotkey "RightAlt" --toggle
 ```
 
 参数：
 
 - `--address`：手机 IP + 端口（手机 OpenLess 固定监听 `45678`）
-- `--hotkey`：全局触发热键，默认 `Ctrl+Shift+Space`，支持 `Ctrl/Alt/Shift/Super` + 字母/数字/F1-F12/Space 等
+- `--hotkey`：全局触发热键，默认 `Ctrl+Shift+Space`；支持 `Ctrl/Alt/Shift/Super` + 主键，以及单独 `RightAlt` / `LeftAlt`
+- `--toggle`：切换模式（按一下开始，再按一下结束）
+- `--fcitx`：通过 fcitx5 OpenLess 插件的 DBus 信号监听热键（Wayland 下捕获右 Alt 等修饰键需要 fcitx5 正在运行）
 
 ## 说明
 

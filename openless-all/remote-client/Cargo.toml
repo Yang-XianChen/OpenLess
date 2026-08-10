@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 arboard = "3"
 clap = { version = "4", features = ["derive"] }
+dbus = "0.9"
 enigo = "0.2"
 global-hotkey = "0.6"
 serde = { version = "1", features = ["derive"] }

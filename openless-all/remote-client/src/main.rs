@@ -33,6 +33,12 @@ struct Args {
     /// 触发热键，例如 Ctrl+Shift+Space
     #[arg(long, default_value = "Ctrl+Shift+Space")]
     hotkey: String,
+    /// 切换模式：按一下开始，再按一下结束（默认按住说话模式）
+    #[arg(long)]
+    toggle: bool,
+    /// 使用 fcitx5 DBus 热键通道（Wayland 下捕获修饰键需要）
+    #[arg(long)]
+    fcitx: bool,
     /// 可选配置文件（未实现，仅保留占位）
     #[arg(long)]
     config: Option<PathBuf>,
@@ -40,6 +46,10 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+
+    if args.fcitx {
+        run_fcitx_toggle(&args.address);
+    }
 
     let hotkey = match parse_hotkey(&args.hotkey) {
         Ok(hotkey) => hotkey,
@@ -62,9 +72,12 @@ fn main() {
     }
 
     let _ = SESSION.set(Mutex::new(None));
+    let mut recording = false;
     println!(
-        "[remote] listening {} -> ws://{} (hold to talk)",
-        args.hotkey, args.address
+        "[remote] listening {} -> ws://{} ({})",
+        args.hotkey,
+        args.address,
+        if args.toggle { "toggle" } else { "hold to talk" }
     );
 
     let receiver = GlobalHotKeyEvent::receiver();
@@ -82,18 +95,150 @@ fn main() {
         match event.state() {
             HotKeyState::Pressed => {
                 println!("[remote] hotkey pressed");
-                if let Err(error) = start_session(&args.address) {
+                if args.toggle {
+                    if recording {
+                        println!("[remote] stopping…");
+                        if let Err(error) = stop_session(&args.address) {
+                            eprintln!("[remote] stop failed: {error}");
+                        }
+                        recording = false;
+                    } else {
+                        println!("[remote] starting…");
+                        if let Err(error) = start_session(&args.address) {
+                            eprintln!("[remote] start failed: {error}");
+                        } else {
+                            recording = true;
+                        }
+                    }
+                } else if let Err(error) = start_session(&args.address) {
                     eprintln!("[remote] start failed: {error}");
                 }
             }
             HotKeyState::Released => {
-                println!("[remote] hotkey released");
-                if let Err(error) = stop_session(&args.address) {
-                    eprintln!("[remote] stop failed: {error}");
+                if !args.toggle {
+                    println!("[remote] hotkey released");
+                    if let Err(error) = stop_session(&args.address) {
+                        eprintln!("[remote] stop failed: {error}");
+                    }
                 }
             }
         }
     }
+}
+
+const DBUS_DEST: &str = "org.fcitx.Fcitx5";
+const DBUS_PATH: &str = "/openless";
+const DBUS_IFACE: &str = "org.fcitx.Fcitx.OpenLess1";
+const KEYSYM_ALT_R: u32 = 0xffea;
+
+/// Wayland 方案：通过 fcitx5 OpenLess 插件监听右 Alt 键事件。
+/// 右 Alt 按下 → 切换 开始/停止；松手不处理（toggle 模式）。
+fn run_fcitx_toggle(address: &str) -> ! {
+    use dbus::blocking::SyncConnection;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let conn = match SyncConnection::new_session() {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("[remote] DBus session failed: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    let rule = match dbus::message::MatchRule::parse(
+        "type='signal',interface='org.fcitx.Fcitx.OpenLess1'",
+    ) {
+        Ok(rule) => rule,
+        Err(error) => {
+            eprintln!("[remote] invalid DBus match rule: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    let (tx, rx) = mpsc::channel::<bool>();
+    if let Err(error) = conn.add_match(rule, move |args: (u32, u32, bool), _conn, msg| {
+        let member: String = msg
+            .member()
+            .as_ref()
+            .map(|m| m.to_string())
+            .unwrap_or_default();
+        if member == "DictationKeyEvent" && args.2 {
+            let _ = tx.send(true);
+        }
+        true
+    }) {
+        eprintln!("[remote] failed to add DBus match: {error}");
+        std::process::exit(1);
+    }
+
+    // 初始同步：等 fcitx5 可用后把触发键设为右 Alt。
+    loop {
+        if fcitx5_available(&conn) {
+            match set_hotkey_raw(&conn, KEYSYM_ALT_R, 0) {
+                Ok(()) => break,
+                Err(error) => {
+                    eprintln!("[remote] SetHotkeyRaw failed: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        let _ = conn.process(Duration::from_millis(500));
+    }
+
+    println!("[remote] fcitx5 Right Alt toggle -> ws://{address}");
+    let mut recording = false;
+    loop {
+        let _ = conn.process(Duration::from_millis(200));
+        while let Ok(true) = rx.try_recv() {
+            if recording {
+                println!("[remote] stopping…");
+                if let Err(error) = stop_session(address) {
+                    eprintln!("[remote] stop failed: {error}");
+                }
+                recording = false;
+            } else {
+                println!("[remote] starting…");
+                if let Err(error) = start_session(address) {
+                    eprintln!("[remote] start failed: {error}");
+                } else {
+                    recording = true;
+                }
+            }
+        }
+    }
+}
+
+fn fcitx5_available(conn: &dbus::blocking::SyncConnection) -> bool {
+    use dbus::blocking::BlockingSender;
+    let msg = match dbus::Message::new_method_call(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+    ) {
+        Ok(msg) => msg,
+        Err(_) => return false,
+    };
+    let msg = msg.append1("org.fcitx.Fcitx5");
+    match conn.send_with_reply_and_block(msg, std::time::Duration::from_secs(1)) {
+        Ok(reply) => reply.read1::<bool>().unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+fn set_hotkey_raw(
+    conn: &dbus::blocking::SyncConnection,
+    sym: u32,
+    states: u32,
+) -> Result<(), String> {
+    use dbus::blocking::BlockingSender;
+    let msg = dbus::Message::new_method_call(DBUS_DEST, DBUS_PATH, DBUS_IFACE, "SetHotkeyRaw")
+        .map_err(|e| format!("build msg: {e}"))?
+        .append2(sym, states);
+    conn.send_with_reply_and_block(msg, std::time::Duration::from_secs(3))
+        .map_err(|e| format!("SetHotkeyRaw: {e}"))?;
+    Ok(())
 }
 
 fn start_session(address: &str) -> Result<(), String> {
@@ -248,6 +393,8 @@ fn parse_hotkey(raw: &str) -> Result<HotKey, String> {
             "alt" | "option" | "opt" => modifiers |= Modifiers::ALT,
             "shift" => modifiers |= Modifiers::SHIFT,
             "super" | "cmd" | "command" | "meta" | "win" => modifiers |= Modifiers::SUPER,
+            "rightalt" | "altright" | "ralt" | "右alt" => code = Some(Code::AltRight),
+            "leftalt" | "altleft" | "lalt" | "左alt" => code = Some(Code::AltLeft),
             "space" => code = Some(Code::Space),
             "enter" | "return" => code = Some(Code::Enter),
             "tab" => code = Some(Code::Tab),
