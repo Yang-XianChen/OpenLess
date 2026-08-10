@@ -69,6 +69,7 @@ jobs:
             - 手机打开 OpenLess 后监听 `0.0.0.0:45678`
             - 真机（arm64）下载 `..._arm64-v8a.apk`；x86_64 模拟器下载 `..._x86_64.apk`
             - 这是 **debug 未签名构建**：覆盖安装前先卸载旧版，安装时允许「安装未知应用」
+            - Android 新增 **单像素悬浮窗保活**：需授予悬浮窗权限；开启后以 1×1 透明、不可交互悬浮窗在锁屏/后台保持进程存活，可继续录音
 
             协议与电脑端用法见仓库 `openless-all/remote-client/README.md`。
           files: ${{ steps.apk.outputs.release_files }}

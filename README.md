@@ -7,11 +7,11 @@ OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转�
 
 ## 这个 fork 新增了什么
 
-- **Android 平台支持**：完整的 Android 应用代码与 CI 构建，包含麦克风录音、ASR/润色、悬浮窗、无障碍插入、Shizuku 辅助、凭据保管库和应用内更新等能力。
+- **Android 平台支持**：完整的 Android 应用代码与 CI 构建，包含麦克风录音、ASR/润色、悬浮窗、无障碍插入、Shizuku 辅助、凭据保管库、应用内更新，以及单像素悬浮窗保活（锁屏/后台录音）等能力。
 - **局域网远程听写（Android ↔ PC）**：Android 端启动后监听 `0.0.0.0:45678`，电脑端通过 WebSocket 触发热键录音，手机完成听写后将文本回传并插入电脑当前光标。
 - **电脑端 remote-client**：极简无界面 Linux 客户端，支持局域网自动发现、热键触发、切换/按住模式、连接状态提示，以及 Wayland 下的 fcitx5 输入法通道（`--fcitx`）。
 - **Linux arm64 安装包**：本地交叉编译的 OpenLess v1.3.16 `.deb`，并附带 fcitx5 插件。
-- **V10 增强**：后台自动发现与心跳、断线提示与自动重连提示、错误透传、保活悬浮层，以及一对多连接的会话锁（同一时刻仅一个客户端持有听写会话）。
+- **V10 增强**：后台自动发现与心跳、断线提示与自动重连提示、错误透传、单像素悬浮窗保活（1×1 透明、不可交互，锁屏/后台保持进程存活以继续录音），以及一对多连接的会话锁（同一时刻仅一个客户端持有听写会话）。
 
 ## 已发布版本与资产
 
@@ -25,7 +25,7 @@ OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转�
 
 | 资产 | 平台 | 作用 |
 | --- | --- | --- |
-| `OpenLess_1.3.16_android-lan_arm64-v8a.apk` | Android（arm64-v8a） | 手机端 OpenLess 1.3.16，负责录音、ASR/润色并回传文本；监听 `45678` 端口 |
+| `OpenLess_1.3.16_android-lan_arm64-v8a.apk` | Android（arm64-v8a） | 手机端 OpenLess 1.3.16，负责录音、ASR/润色并回传文本；监听 `45678` 端口；支持单像素悬浮窗保活，可在锁屏/后台继续录音 |
 | `openless-remote-client-linux-aarch64` | Linux（ARM64） | 电脑端无界面客户端，热键触发手机听写并把结果粘贴到当前光标 |
 | `openless-remote-client-linux-x86_64` | Linux（x86_64） | 同上，适用于 x86_64 架构电脑 |
 
@@ -33,7 +33,7 @@ OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转�
 
 ### 1. 安装手机端
 
-从 [android-lan-v10](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-v10) 下载 `OpenLess_1.3.16_android-lan_arm64-v8a.apk` 并安装。打开 OpenLess 后，应用会在 `0.0.0.0:45678` 监听局域网连接；使用期间请保持手机与电脑在同一可信网络，并尽量保持应用前台/亮屏。
+从 [android-lan-v10](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-v10) 下载 `OpenLess_1.3.16_android-lan_arm64-v8a.apk` 并安装。打开 OpenLess 后，应用会在 `0.0.0.0:45678` 监听局域网连接；使用期间请保持手机与电脑在同一可信网络；如需锁屏/后台录音，请在设置中开启悬浮窗权限与「单像素悬浮窗保活」；未开启时建议保持应用前台/亮屏。
 
 > 若之前安装过旧版，覆盖安装前请先卸载旧版。
 
