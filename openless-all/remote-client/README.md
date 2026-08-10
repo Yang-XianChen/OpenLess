@@ -16,16 +16,16 @@ cargo build --release
 ## 运行
 
 ```bash
-./openless-remote-client --address 192.168.1.20:45678 \
-  --hotkey "RightAlt" --toggle
+./openless-remote-client --auto-discover --hotkey "RightAlt" --fcitx
 ```
 
 参数：
 
 - `--address`：手机 IP + 端口（手机 OpenLess 固定监听 `45678`）
+- `--auto-discover`：自动扫描局域网内监听 `45678` 并响应 OpenLess ping 的手机，连接失败会自动重试一次
 - `--hotkey`：全局触发热键，默认 `Ctrl+Shift+Space`；支持 `Ctrl/Alt/Shift/Super` + 主键，以及单独 `RightAlt` / `LeftAlt`
 - `--toggle`：切换模式（按一下开始，再按一下结束）
-- `--fcitx`：通过 fcitx5 OpenLess 插件的 DBus 信号监听热键（Wayland 下捕获右 Alt 等修饰键需要 fcitx5 正在运行）
+- `--fcitx`：通过 fcitx5 OpenLess 插件的 DBus 通道监听热键，并在输入法提示区显示「正在录音/正在转录/连接失败」状态（Wayland 下捕获右 Alt 需要）
 
 ## 说明
 

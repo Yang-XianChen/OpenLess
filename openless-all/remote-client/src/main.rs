@@ -2,15 +2,20 @@
 //!
 //! 用法：
 //! ```text
-//! openless-remote-client --address 192.168.1.20:45678 [--hotkey "Ctrl+Shift+Space"]
+//! openless-remote-client --address 192.168.1.20:45678 [--hotkey "RightAlt"] [--fcitx]
+//! openless-remote-client --auto-discover [--hotkey "RightAlt"] [--fcitx]
 //! ```
 //!
-//! 按住热键：向手机 OpenLess 发送 `start`，手机开始录音/ASR/润色；
-//! 松开热键：发送 `stop`，手机处理完成后回传 `final_text`，本程序模拟 Ctrl+V
-//! （macOS 为 Cmd+V）把文本插入当前光标位置。
+//! 按下热键：向手机 OpenLess 发送 `start`，手机开始录音/ASR/润色；
+//! 松开（或切换模式下再按一次）：发送 `stop`，手机回传 `final_text`，
+//! 电脑端优先通过 fcitx5 `CommitText` 插入光标（Wayland 可用）。
+//!
+//! fcitx5 通道下会在输入法候选/提示区显示状态：
+//! 正在录音 → 正在转录 → 完成清除；连接失败会显示失败提示并自动重试一次。
 
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::net::IpAddr;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -23,20 +28,31 @@ type ClientSocket =
     tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
 
 static SESSION: OnceLock<Mutex<Option<ClientSocket>>> = OnceLock::new();
+static DISCOVERED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+const DEFAULT_PORT: u16 = 45678;
+const AUX_RECORDING: &str = "🎤 正在录音…";
+const AUX_TRANSCRIBING: &str = "⏳ 正在转录…";
+const AUX_SEARCHING: &str = "🔍 正在搜索手机…";
+const AUX_RETRY: &str = "连接失败，正在重试…";
+const AUX_FAILED: &str = "❌ 连接失败";
 
 #[derive(Parser, Debug)]
 #[command(name = "openless-remote-client", about = "Headless OpenLess Android LAN dictation client")]
 struct Args {
-    /// 手机地址，例如 192.168.1.20:45678
+    /// 手机地址，例如 192.168.1.20:45678（与 --auto-discover 二选一）
     #[arg(long)]
-    address: String,
+    address: Option<String>,
+    /// 自动搜索局域网内监听 45678 端口的手机
+    #[arg(long)]
+    auto_discover: bool,
     /// 触发热键，例如 Ctrl+Shift+Space
     #[arg(long, default_value = "Ctrl+Shift+Space")]
     hotkey: String,
     /// 切换模式：按一下开始，再按一下结束（默认按住说话模式）
     #[arg(long)]
     toggle: bool,
-    /// 使用 fcitx5 DBus 热键通道（Wayland 下捕获修饰键需要）
+    /// 使用 fcitx5 DBus 热键/输入法通道（Wayland 下捕获右 Alt 需要）
     #[arg(long)]
     fcitx: bool,
     /// 可选配置文件（未实现，仅保留占位）
@@ -48,9 +64,10 @@ fn main() {
     let args = Args::parse();
 
     let _ = SESSION.set(Mutex::new(None));
+    let _ = DISCOVERED.set(Mutex::new(None));
 
     if args.fcitx {
-        run_fcitx_toggle(&args.address);
+        run_fcitx(args.address.clone(), args.auto_discover, args.toggle);
     }
 
     let hotkey = match parse_hotkey(&args.hotkey) {
@@ -74,10 +91,10 @@ fn main() {
     }
 
     let mut recording = false;
+    let mut session_address: Option<String> = None;
     println!(
-        "[remote] listening {} -> ws://{} ({})",
+        "[remote] listening {} ({})",
         args.hotkey,
-        args.address,
         if args.toggle { "toggle" } else { "hold to talk" }
     );
 
@@ -98,28 +115,34 @@ fn main() {
                 println!("[remote] hotkey pressed");
                 if args.toggle {
                     if recording {
-                        println!("[remote] stopping…");
-                        if let Err(error) = stop_session(&args.address) {
-                            eprintln!("[remote] stop failed: {error}");
-                        }
                         recording = false;
-                    } else {
-                        println!("[remote] starting…");
-                        if let Err(error) = start_session(&args.address) {
-                            eprintln!("[remote] start failed: {error}");
-                        } else {
-                            recording = true;
+                        if let Some(address) = session_address.take() {
+                            stop_flow(&address);
+                        }
+                    } else if !recording {
+                        match start_flow(args.address.as_deref(), args.auto_discover) {
+                            Ok(address) => {
+                                session_address = Some(address);
+                                recording = true;
+                            }
+                            Err(error) => eprintln!("[remote] start failed: {error}"),
                         }
                     }
-                } else if let Err(error) = start_session(&args.address) {
-                    eprintln!("[remote] start failed: {error}");
+                } else if !recording {
+                    match start_flow(args.address.as_deref(), args.auto_discover) {
+                        Ok(address) => {
+                            session_address = Some(address);
+                            recording = true;
+                        }
+                        Err(error) => eprintln!("[remote] start failed: {error}"),
+                    }
                 }
             }
             HotKeyState::Released => {
-                if !args.toggle {
-                    println!("[remote] hotkey released");
-                    if let Err(error) = stop_session(&args.address) {
-                        eprintln!("[remote] stop failed: {error}");
+                if !args.toggle && recording {
+                    recording = false;
+                    if let Some(address) = session_address.take() {
+                        stop_flow(&address);
                     }
                 }
             }
@@ -127,17 +150,17 @@ fn main() {
     }
 }
 
+// ───────────────────────── fcitx5 通道 ─────────────────────────
+
 const DBUS_DEST: &str = "org.fcitx.Fcitx5";
 const DBUS_PATH: &str = "/openless";
 const DBUS_IFACE: &str = "org.fcitx.Fcitx.OpenLess1";
 const KEYSYM_ALT_R: u32 = 0xffea;
 
-/// Wayland 方案：通过 fcitx5 OpenLess 插件监听右 Alt 键事件。
-/// 右 Alt 按下 → 切换 开始/停止；松手不处理（toggle 模式）。
-fn run_fcitx_toggle(address: &str) -> ! {
+/// Wayland 方案：通过 fcitx5 OpenLess 插件监听右 Alt 键事件，
+/// 并在输入法提示区显示录音/转录/失败状态。
+fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool) -> ! {
     use dbus::blocking::SyncConnection;
-    use std::sync::mpsc;
-    use std::time::Duration;
 
     let conn = match SyncConnection::new_session() {
         Ok(conn) => conn,
@@ -164,8 +187,8 @@ fn run_fcitx_toggle(address: &str) -> ! {
             .as_ref()
             .map(|m| m.to_string())
             .unwrap_or_default();
-        if member == "DictationKeyEvent" && args.2 {
-            let _ = tx.send(true);
+        if member == "DictationKeyEvent" {
+            let _ = tx.send(args.2);
         }
         true
     }) {
@@ -187,23 +210,41 @@ fn run_fcitx_toggle(address: &str) -> ! {
         let _ = conn.process(Duration::from_millis(500));
     }
 
-    println!("[remote] fcitx5 Right Alt toggle -> ws://{address}");
+    println!("[remote] fcitx5 Right Alt active ({})", if toggle { "toggle" } else { "hold to talk" });
     let mut recording = false;
+    let mut session_address: Option<String> = None;
     loop {
         let _ = conn.process(Duration::from_millis(200));
-        while let Ok(true) = rx.try_recv() {
-            if recording {
-                println!("[remote] stopping…");
-                if let Err(error) = stop_session(address) {
-                    eprintln!("[remote] stop failed: {error}");
+        while let Ok(is_press) = rx.try_recv() {
+            if is_press {
+                if toggle {
+                    if recording {
+                        recording = false;
+                        if let Some(address) = session_address.take() {
+                            stop_flow(&address);
+                        }
+                    } else if !recording {
+                        match start_flow(address.as_deref(), auto_discover) {
+                            Ok(found) => {
+                                session_address = Some(found);
+                                recording = true;
+                            }
+                            Err(error) => eprintln!("[remote] start failed: {error}"),
+                        }
+                    }
+                } else if !recording {
+                    match start_flow(address.as_deref(), auto_discover) {
+                        Ok(found) => {
+                            session_address = Some(found);
+                            recording = true;
+                        }
+                        Err(error) => eprintln!("[remote] start failed: {error}"),
+                    }
                 }
+            } else if !toggle && recording {
                 recording = false;
-            } else {
-                println!("[remote] starting…");
-                if let Err(error) = start_session(address) {
-                    eprintln!("[remote] start failed: {error}");
-                } else {
-                    recording = true;
+                if let Some(address) = session_address.take() {
+                    stop_flow(&address);
                 }
             }
         }
@@ -222,7 +263,7 @@ fn fcitx5_available(conn: &dbus::blocking::SyncConnection) -> bool {
         Err(_) => return false,
     };
     let msg = msg.append1("org.fcitx.Fcitx5");
-    match conn.send_with_reply_and_block(msg, std::time::Duration::from_secs(1)) {
+    match conn.send_with_reply_and_block(msg, Duration::from_secs(1)) {
         Ok(reply) => reply.read1::<bool>().unwrap_or(false),
         Err(_) => false,
     }
@@ -237,9 +278,134 @@ fn set_hotkey_raw(
     let msg = dbus::Message::new_method_call(DBUS_DEST, DBUS_PATH, DBUS_IFACE, "SetHotkeyRaw")
         .map_err(|e| format!("build msg: {e}"))?
         .append2(sym, states);
-    conn.send_with_reply_and_block(msg, std::time::Duration::from_secs(3))
+    conn.send_with_reply_and_block(msg, Duration::from_secs(3))
         .map_err(|e| format!("SetHotkeyRaw: {e}"))?;
     Ok(())
+}
+
+// ───────────────────────── 会话控制 ─────────────────────────
+
+fn start_flow(address: Option<&str>, auto_discover: bool) -> Result<String, String> {
+    let _ = set_aux_down(AUX_RECORDING);
+    let mut last_error = "未连接".to_string();
+    for attempt in 0..2 {
+        let resolved = match resolve_address(address, auto_discover) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                last_error = error;
+                if attempt == 0 {
+                    let _ = set_aux_down(AUX_SEARCHING);
+                }
+                continue;
+            }
+        };
+        println!("[remote] connecting {resolved} (attempt {})", attempt + 1);
+        match start_session(&resolved) {
+            Ok(()) => {
+                if let Some(cache) = DISCOVERED.get() {
+                    *cache.lock().unwrap() = Some(resolved.clone());
+                }
+                return Ok(resolved);
+            }
+            Err(error) => {
+                last_error = error;
+                if attempt == 0 {
+                    let _ = set_aux_down(AUX_RETRY);
+                }
+            }
+        }
+    }
+    flash_aux(AUX_FAILED);
+    Err(last_error)
+}
+
+fn stop_flow(address: &str) {
+    let _ = set_aux_down(AUX_TRANSCRIBING);
+    match stop_session(address) {
+        Ok(()) => {
+            let _ = clear_aux_down();
+        }
+        Err(error) => {
+            let message = format!("❌ 转录失败：{error}");
+            flash_aux(&message);
+        }
+    }
+}
+
+fn resolve_address(address: Option<&str>, auto_discover: bool) -> Result<String, String> {
+    if let Some(address) = address {
+        let address = address.trim();
+        if !address.is_empty() {
+            return Ok(address.to_string());
+        }
+    }
+    if auto_discover {
+        if let Some(cache) = DISCOVERED.get() {
+            if let Some(found) = cache.lock().unwrap().clone() {
+                return Ok(found);
+            }
+        }
+        match discover_phone(DEFAULT_PORT) {
+            Some(found) => {
+                if let Some(cache) = DISCOVERED.get() {
+                    *cache.lock().unwrap() = Some(found.clone());
+                }
+                Ok(found)
+            }
+            None => Err("未发现手机设备".to_string()),
+        }
+    } else {
+        Err("未配置手机地址（--address 或 --auto-discover）".to_string())
+    }
+}
+
+/// 扫描本机局域网 /24 网段里监听指定端口并能回复 OpenLess ping 的设备。
+fn discover_phone(port: u16) -> Option<String> {
+    let mut prefixes = Vec::new();
+    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
+        for (_name, ip) in interfaces {
+            if let IpAddr::V4(v4) = ip {
+                if v4.is_loopback() || v4.is_link_local() {
+                    continue;
+                }
+                let octets = v4.octets();
+                let private = octets[0] == 10
+                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                    || (octets[0] == 192 && octets[1] == 168);
+                if private {
+                    prefixes.push(format!("{}.{}.{}", octets[0], octets[1], octets[2]));
+                }
+            }
+        }
+    }
+    if prefixes.is_empty() {
+        return None;
+    }
+
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::scope(|scope| {
+        for prefix in prefixes {
+            for host in 1..=254 {
+                let tx = tx.clone();
+                let prefix = prefix.clone();
+                let url = format!("ws://{prefix}.{host}:{port}");
+                scope.spawn(move || {
+                    if let Ok((mut socket, _)) = connect(&url) {
+                        if let tungstenite::stream::MaybeTlsStream::Plain(tcp) = socket.get_ref() {
+                            let _ = tcp.set_read_timeout(Some(Duration::from_millis(1200)));
+                        }
+                        let _ = socket.send(Message::Text(json!({"type":"ping"}).to_string().into()));
+                        if let Ok(Message::Text(text)) = socket.read() {
+                            if text.contains("\"pong\"") {
+                                let _ = tx.send(format!("{prefix}.{host}:{port}"));
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        rx.recv_timeout(Duration::from_secs(10)).ok()
+    })
 }
 
 fn start_session(address: &str) -> Result<(), String> {
@@ -310,13 +476,11 @@ fn stop_session(address: &str) -> Result<(), String> {
 
 fn wait_for_type(socket: &mut ClientSocket, expected: &[&str]) -> Result<(), String> {
     loop {
-        let frame = socket
-            .read()
-            .map_err(|e| format!("read ack: {e}"))?;
+        let frame = socket.read().map_err(|e| format!("read ack: {e}"))?;
         match frame {
             Message::Text(text) => {
-                let value: serde_json::Value = serde_json::from_str(text.as_str())
-                    .map_err(|e| format!("bad ack json: {e}"))?;
+                let value: serde_json::Value =
+                    serde_json::from_str(text.as_str()).map_err(|e| format!("bad ack json: {e}"))?;
                 match value["type"].as_str() {
                     Some(kind) if expected.contains(&kind) => return Ok(()),
                     Some("error") => {
@@ -340,6 +504,8 @@ fn send_json(socket: &mut ClientSocket, value: serde_json::Value) -> Result<(), 
         .map_err(|e| format!("send: {e}"))
 }
 
+// ───────────────────────── 插入 ─────────────────────────
+
 fn insert_text(text: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -349,7 +515,9 @@ fn insert_text(text: &str) -> Result<(), String> {
                 return Ok(());
             }
             Err(error) => {
-                eprintln!("[remote] fcitx5 CommitText failed: {error}; falling back to clipboard paste");
+                eprintln!(
+                    "[remote] fcitx5 CommitText failed: {error}; falling back to clipboard paste"
+                );
             }
         }
     }
@@ -405,10 +573,49 @@ fn commit_text_via_fcitx(text: &str) -> Result<(), String> {
     let msg = dbus::Message::new_method_call(DBUS_DEST, DBUS_PATH, DBUS_IFACE, "CommitText")
         .map_err(|e| format!("build msg: {e}"))?
         .append1(text);
-    conn.send_with_reply_and_block(msg, std::time::Duration::from_secs(3))
+    conn.send_with_reply_and_block(msg, Duration::from_secs(3))
         .map_err(|e| format!("CommitText: {e}"))?;
     Ok(())
 }
+
+// ───────────────────────── fcitx5 提示区 ─────────────────────────
+
+fn set_aux_down(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use dbus::blocking::BlockingSender;
+        let conn =
+            dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
+        let msg = dbus::Message::new_method_call(DBUS_DEST, DBUS_PATH, DBUS_IFACE, "SetAuxDown")
+            .map_err(|e| format!("build msg: {e}"))?
+            .append1(text);
+        conn.send_with_reply_and_block(msg, Duration::from_secs(2))
+            .map_err(|e| format!("SetAuxDown: {e}"))?;
+    }
+    Ok(())
+}
+
+fn clear_aux_down() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use dbus::blocking::BlockingSender;
+        let conn =
+            dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
+        let msg = dbus::Message::new_method_call(DBUS_DEST, DBUS_PATH, DBUS_IFACE, "ClearAuxDown")
+            .map_err(|e| format!("build msg: {e}"))?;
+        conn.send_with_reply_and_block(msg, Duration::from_secs(2))
+            .map_err(|e| format!("ClearAuxDown: {e}"))?;
+    }
+    Ok(())
+}
+
+fn flash_aux(text: &str) {
+    let _ = set_aux_down(text);
+    std::thread::sleep(Duration::from_secs(3));
+    let _ = clear_aux_down();
+}
+
+// ───────────────────────── 热键解析 ─────────────────────────
 
 fn parse_hotkey(raw: &str) -> Result<HotKey, String> {
     let mut modifiers = Modifiers::empty();

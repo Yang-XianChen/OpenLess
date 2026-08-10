@@ -43,6 +43,9 @@ pub fn run() {
             {
                 crate::android::register_android_coordinator(coordinator.clone());
                 crate::android::lan_server::start(coordinator.clone());
+                if let Err(error) = crate::android::native_bridge::promote_remote_recording() {
+                    log::warn!("[android] remote recording foreground service start failed: {error}");
+                }
                 coordinator.apply_android_overlay_on_startup();
             }
             Ok(())

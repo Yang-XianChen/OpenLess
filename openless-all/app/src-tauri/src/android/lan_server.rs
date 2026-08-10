@@ -123,6 +123,10 @@ async fn handle_connection(
                             send_json(&mut ws, error_msg("session already active")).await?;
                             continue;
                         }
+                        if let Err(error) = crate::android::native_bridge::promote_remote_recording()
+                        {
+                            log::warn!("[lan-remote] promote foreground service failed: {error}");
+                        }
                         let previous_first_id =
                             coordinator.last_finished_session().map(|s| s.id);
                         coordinator.set_remote_capture_mode(true);
@@ -166,7 +170,6 @@ async fn handle_connection(
                             RESULT_TIMEOUT,
                         )
                         .await;
-                        coordinator.set_remote_capture_mode(false);
                         match text {
                             Some(text) => {
                                 send_json(
@@ -183,6 +186,7 @@ async fn handle_connection(
                                 .await?;
                             }
                         }
+                        coordinator.set_remote_capture_mode(false);
                         send_json(&mut ws, serde_json::json!({ "type": "stopped" })).await?;
                     }
                     "cancel" => {

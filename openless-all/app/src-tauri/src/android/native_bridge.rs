@@ -12,6 +12,30 @@ pub fn register_android_coordinator(coordinator: Arc<Coordinator>) {
     let _ = COORDINATOR.set(coordinator);
 }
 
+/// 启动/提升为前台麦克风服务（局域网远程听写用，锁屏后仍可录音）。
+pub fn promote_remote_recording() -> Result<(), String> {
+    crate::android::jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::start_service_action(
+            env,
+            context,
+            "com.openless.app.OpenLessOverlayService",
+            "com.openless.app.overlay.LAN_START_RECORDING",
+        )
+    })
+}
+
+/// 结束局域网远程听写的前台麦克风服务。
+pub fn release_remote_recording() -> Result<(), String> {
+    crate::android::jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::start_service_action(
+            env,
+            context,
+            "com.openless.app.OpenLessOverlayService",
+            "com.openless.app.overlay.LAN_RELEASE",
+        )
+    })
+}
+
 pub fn notify_capsule_state(payload: &CapsulePayload) {
     #[cfg(target_os = "android")]
     {

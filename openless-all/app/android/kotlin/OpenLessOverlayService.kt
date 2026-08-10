@@ -71,6 +71,22 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
                 beginDictationFromOverlay()
             }
+            ACTION_LAN_START_RECORDING -> {
+                // 局域网远程听写：只把服务提升为前台麦克风服务，让锁屏/后台也能录音。
+                if (!tryPromoteForeground("远程听写中")) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+            }
+            ACTION_LAN_RELEASE -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                stopSelf(startId)
+            }
             ACTION_HIDE -> {
                 hideOverlay()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -700,11 +716,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun tryPromoteRecordingForeground(): Boolean {
+        return tryPromoteForeground("录音中")
+    }
+
+    private fun tryPromoteForeground(notificationText: String): Boolean {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             showToast("请先授予麦克风权限")
             return false
         }
-        val notification = buildNotification("录音中")
+        val notification = buildNotification(notificationText)
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -826,6 +846,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val ACTION_REFRESH_LAYOUT = "com.openless.app.overlay.REFRESH_LAYOUT"
         const val ACTION_TOGGLE_EXPAND = "com.openless.app.overlay.TOGGLE_EXPAND"
         const val ACTION_START_RECORDING = "com.openless.app.overlay.START_RECORDING"
+        const val ACTION_LAN_START_RECORDING = "com.openless.app.overlay.LAN_START_RECORDING"
+        const val ACTION_LAN_RELEASE = "com.openless.app.overlay.LAN_RELEASE"
         const val ACTION_KEYBOARD_CHANGED = "com.openless.app.overlay.KEYBOARD_CHANGED"
         const val EXTRA_KEYBOARD_VISIBLE = "keyboard_visible"
         const val EXTRA_KEYBOARD_TOP = "keyboard_top"
