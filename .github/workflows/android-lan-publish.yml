@@ -20,11 +20,22 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Download APK artifacts from existing run
-        uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ github.event.inputs.artifact_ids }}
-          path: apks
+      - name: Download APK artifacts via API
+        shell: bash
+        env:
+          ARTIFACT_IDS: ${{ github.event.inputs.artifact_ids }}
+        run: |
+          set -euo pipefail
+          mkdir -p apks
+          IFS=',' read -ra ids <<< "$ARTIFACT_IDS"
+          for id in "${ids[@]}"; do
+            echo "Downloading artifact $id"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/${id}/zip" \
+              > "apks/artifact-${id}.zip"
+            (cd apks && unzip -o "artifact-${id}.zip")
+            rm -f "apks/artifact-${id}.zip"
+          done
+          find apks -type f -name '*.apk' -print
 
       - name: Collect APK files
         id: apk
