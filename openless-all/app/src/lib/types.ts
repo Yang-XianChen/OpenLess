@@ -501,6 +501,8 @@ export interface UserPreferences {
   androidOverlayCancelSwipeDirection: AndroidOverlayCancelSwipeDirection;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
+  /** Android: 1x1 non-interactive overlay to keep the process alive. */
+  androidSinglePixelKeepalive: boolean;
 }
 
 export interface MarketplaceListItem {

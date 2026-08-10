@@ -1290,6 +1290,10 @@ impl Coordinator {
         self.inner.prefs.get().android_overlay_trigger.normalized()
     }
 
+    pub fn android_single_pixel_keepalive_enabled(&self) -> bool {
+        self.inner.prefs.get().android_single_pixel_keepalive
+    }
+
     pub fn apply_android_overlay_settings_change(
         &self,
         previous: &crate::types::UserPreferences,
@@ -1297,6 +1301,9 @@ impl Coordinator {
     ) {
         #[cfg(target_os = "android")]
         {
+            if previous.android_single_pixel_keepalive != next.android_single_pixel_keepalive {
+                crate::android::apply_single_pixel_keepalive(next.android_single_pixel_keepalive);
+            }
             use crate::types::android_types::{
                 classify_android_overlay_settings_change, AndroidOverlaySettingsAction,
             };
@@ -1367,6 +1374,9 @@ impl Coordinator {
                     let _ = crate::android::hide_android_overlay();
                 }
             }
+            crate::android::apply_single_pixel_keepalive(
+                self.android_single_pixel_keepalive_enabled(),
+            );
         }
     }
 

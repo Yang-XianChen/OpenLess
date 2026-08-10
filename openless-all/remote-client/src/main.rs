@@ -15,7 +15,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -27,6 +27,10 @@ type ClientSocket = tungstenite::WebSocket<std::net::TcpStream>;
 
 static SESSION: OnceLock<Mutex<Option<ClientSocket>>> = OnceLock::new();
 static DISCOVERED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// 连接断开后，下次后台扫描自动发现手机时弹一次「已自动连接」提示。
+static CONNECTED_AGAIN_PENDING: AtomicBool = AtomicBool::new(false);
+/// 提示代际：新的 SetAuxDown 会让旧 flash 不再清掉新提示。
+static AUX_TOKEN: AtomicU64 = AtomicU64::new(0);
 
 const DEFAULT_PORT: u16 = 45678;
 const AUX_RECORDING: &str = "🎤 正在录音…";
@@ -34,6 +38,8 @@ const AUX_TRANSCRIBING: &str = "⏳ 正在转录…";
 const AUX_RETRY: &str = "连接失败，正在重试…";
 const ERR_NO_DEVICE: &str = "未连接手机：请确认手机端 OpenLess 已运行，等待后台扫描发现设备";
 const SCAN_INTERVAL: Duration = Duration::from_secs(15);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const HEARTBEAT_FAIL_LIMIT: u32 = 2;
 const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
 const PROBE_READ_TIMEOUT: Duration = Duration::from_millis(1200);
 const SESSION_READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -216,6 +222,7 @@ fn start_flow(address: Option<&str>, auto_discover: bool) -> Result<String, Stri
     let resolved = match resolve_address(address, auto_discover) {
         Ok(resolved) => resolved,
         Err(error) => {
+            CONNECTED_AGAIN_PENDING.store(true, Ordering::Relaxed);
             flash_aux(&format!("❌ {error}"));
             return Err(error);
         }
@@ -247,6 +254,7 @@ fn start_flow(address: Option<&str>, auto_discover: bool) -> Result<String, Stri
             *guard = None;
         }
     }
+    CONNECTED_AGAIN_PENDING.store(true, Ordering::Relaxed);
     flash_aux(&format!("❌ 连接失败：{last_error}"));
     Err(last_error)
 }
@@ -283,21 +291,65 @@ fn resolve_address(address: Option<&str>, auto_discover: bool) -> Result<String,
     }
 }
 
-/// 后台持续扫描局域网手机并缓存结果；按热键时直接用缓存，不阻塞提示区。
+/// 后台扫描策略：
+/// - 已缓存到手机地址后不再重复扫描；
+/// - 已连接时每 HEARTBEAT_INTERVAL 秒对已知手机做一次轻量心跳；
+/// - 连续 HEARTBEAT_FAIL_LIMIT 次心跳失败（连接断开）才清除缓存并重新扫描；
+/// - 未发现设备时每 SCAN_INTERVAL 秒重试一次。
 fn start_background_scanner() {
     std::thread::spawn(|| {
         let mut last: Option<String> = None;
+        let mut last_heartbeat = Instant::now();
+        let mut heartbeat_failures: u32 = 0;
         loop {
+            // 会话进行中不做任何扫描/心跳，避免干扰手机。
             if let Some(session) = SESSION.get() {
                 if session.lock().unwrap().is_some() {
-                    std::thread::sleep(SCAN_INTERVAL);
+                    std::thread::sleep(Duration::from_secs(1));
                     continue;
                 }
             }
+
+            // 已连上/已知设备：不整段扫描，只做轻量心跳。
+            let known = DISCOVERED
+                .get()
+                .and_then(|cache| cache.lock().unwrap().clone());
+            if let Some(known) = known {
+                if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                    last_heartbeat = Instant::now();
+                    if ping_phone(&known) {
+                        heartbeat_failures = 0;
+                    } else {
+                        heartbeat_failures += 1;
+                        if heartbeat_failures >= HEARTBEAT_FAIL_LIMIT {
+                            println!("[remote] heartbeat lost: {known}");
+                            CONNECTED_AGAIN_PENDING.store(true, Ordering::Relaxed);
+                            flash_aux("❌ 手机连接断开，正在重新扫描…");
+                            if let Some(cache) = DISCOVERED.get() {
+                                let mut guard = cache.lock().unwrap();
+                                if guard.as_deref() == Some(known.as_str()) {
+                                    *guard = None;
+                                }
+                            }
+                            heartbeat_failures = 0;
+                            last = None;
+                            continue;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+
             let found = discover_phone(DEFAULT_PORT);
             if found != last {
                 match &found {
-                    Some(found) => println!("[remote] background discovery: {found}"),
+                    Some(found) => {
+                        println!("[remote] background discovery: {found}");
+                        if CONNECTED_AGAIN_PENDING.swap(false, Ordering::Relaxed) {
+                            flash_aux(&format!("✅ 已自动连接手机 {found}"));
+                        }
+                    }
                     None => println!("[remote] background discovery: no phone found"),
                 }
                 last = found.clone();
@@ -305,7 +357,12 @@ fn start_background_scanner() {
             if let Some(cache) = DISCOVERED.get() {
                 *cache.lock().unwrap() = found.clone();
             }
-            std::thread::sleep(SCAN_INTERVAL);
+            if found.is_some() {
+                last_heartbeat = Instant::now();
+                std::thread::sleep(Duration::from_secs(1));
+            } else {
+                std::thread::sleep(SCAN_INTERVAL);
+            }
         }
     });
 }
@@ -338,31 +395,33 @@ fn discover_phone(port: u16) -> Option<String> {
 }
 
 fn probe_phone(host: &str, port: u16, tx: &mpsc::Sender<String>, found: &AtomicBool) {
-    let address = match format!("{host}:{port}").parse::<SocketAddr>() {
-        Ok(address) => address,
-        Err(_) => return,
+    let address = format!("{host}:{port}");
+    if ping_phone(&address) && !found.swap(true, Ordering::Relaxed) {
+        let _ = tx.send(address);
+    }
+}
+
+/// 对单个手机地址做一次轻量 WebSocket ping，收到 pong 视为存活。
+fn ping_phone(address: &str) -> bool {
+    let Ok(socket_addr) = address.parse::<SocketAddr>() else {
+        return false;
     };
-    let tcp = match std::net::TcpStream::connect_timeout(&address, PROBE_CONNECT_TIMEOUT) {
-        Ok(tcp) => tcp,
-        Err(_) => return,
+    let Ok(tcp) = std::net::TcpStream::connect_timeout(&socket_addr, PROBE_CONNECT_TIMEOUT)
+    else {
+        return false;
     };
     let _ = tcp.set_read_timeout(Some(PROBE_READ_TIMEOUT));
     let _ = tcp.set_nodelay(true);
-    let (mut socket, _) = match tungstenite::client::client(format!("ws://{address}"), tcp) {
-        Ok(socket) => socket,
-        Err(_) => return,
+    let Ok((mut socket, _)) = tungstenite::client::client(format!("ws://{address}"), tcp) else {
+        return false;
     };
     if socket
         .send(Message::Text(json!({ "type": "ping" }).to_string().into()))
         .is_err()
     {
-        return;
+        return false;
     }
-    if let Ok(Message::Text(text)) = socket.read() {
-        if text.contains("\"pong\"") && !found.swap(true, Ordering::Relaxed) {
-            let _ = tx.send(format!("{address}"));
-        }
-    }
+    matches!(socket.read(), Ok(Message::Text(text)) if text.contains("\"pong\""))
 }
 
 fn local_private_prefixes() -> Vec<String> {
@@ -571,6 +630,7 @@ fn commit_text_via_fcitx(text: &str) -> Result<(), String> {
 // ───────────────────────── fcitx5 提示区 ─────────────────────────
 
 fn set_aux_down(text: &str) -> Result<(), String> {
+    AUX_TOKEN.fetch_add(1, Ordering::Relaxed);
     #[cfg(target_os = "linux")]
     {
         use dbus::blocking::BlockingSender;
@@ -600,7 +660,11 @@ fn clear_aux_down() -> Result<(), String> {
 }
 
 fn flash_aux(text: &str) {
+    let token = AUX_TOKEN.load(Ordering::Relaxed) + 1;
     let _ = set_aux_down(text);
     std::thread::sleep(Duration::from_secs(3));
-    let _ = clear_aux_down();
+    // 期间若有新的状态/提示写入，不再清除它。
+    if AUX_TOKEN.load(Ordering::Relaxed) == token {
+        let _ = clear_aux_down();
+    }
 }

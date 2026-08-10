@@ -66,6 +66,32 @@ pub fn hide_android_overlay() -> Result<(), String> {
     }
 }
 
+/// 单像素悬浮窗保活：需要悬浮窗权限；按偏好开关显示/隐藏。
+pub fn apply_single_pixel_keepalive(enabled: bool) {
+    #[cfg(target_os = "android")]
+    {
+        let granted = crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::can_draw_overlays(env, context)
+        })
+        .unwrap_or(false);
+        if enabled && !granted {
+            log::warn!(
+                "[android-overlay] single-pixel keepalive enabled but overlay permission is not granted"
+            );
+            return;
+        }
+        let result = if enabled {
+            crate::android::native_bridge::show_single_pixel_keepalive()
+        } else {
+            crate::android::native_bridge::hide_single_pixel_keepalive()
+        };
+        if let Err(error) = result {
+            log::warn!("[android-overlay] single-pixel keepalive apply failed: {error}");
+        }
+    }
+    let _ = enabled;
+}
+
 pub fn refresh_android_overlay_if_visible() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {

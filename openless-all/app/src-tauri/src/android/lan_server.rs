@@ -159,17 +159,21 @@ async fn handle_connection(
                             coordinator.last_finished_session().map(|s| s.id);
                         coordinator.set_remote_capture_mode(true);
                         let translation = command.translation;
-                        let coordinator = Arc::clone(&coordinator);
-                        tauri::async_runtime::spawn(async move {
-                            let result = if translation {
-                                coordinator.start_dictation_with_translation().await
-                            } else {
-                                coordinator.start_dictation().await
-                            };
-                            if let Err(error) = result {
-                                log::warn!("[lan-remote] start dictation failed: {error}");
-                            }
-                        });
+                        let start_result = if translation {
+                            coordinator.start_dictation_with_translation().await
+                        } else {
+                            coordinator.start_dictation().await
+                        };
+                        if let Err(error) = start_result {
+                            coordinator.set_remote_capture_mode(false);
+                            release_owner(&registry, addr);
+                            send_json(
+                                &mut ws,
+                                error_msg(&format!("手机端启动听写失败：{error}")),
+                            )
+                            .await?;
+                            continue;
+                        }
                         session = Some(ActiveSession {
                             previous_first_id,
                             translation,
@@ -178,7 +182,7 @@ async fn handle_connection(
                     }
                     "stop" => {
                         let Some(active) = session.take() else {
-                            send_json(&mut ws, error_msg("no active session")).await?;
+                            send_json(&mut ws, error_msg("手机端没有正在进行的会话")).await?;
                             continue;
                         };
                         release_owner(&registry, addr);
@@ -210,7 +214,7 @@ async fn handle_connection(
                             None => {
                                 send_json(
                                     &mut ws,
-                                    error_msg("no dictation result within timeout"),
+                                    error_msg("手机端处理超时，未返回听写结果"),
                                 )
                                 .await?;
                             }

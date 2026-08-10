@@ -44,6 +44,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var longPressRecording = false
     private var pendingSwipe: SwipeDirection? = null
     private var swipeConsumed = false
+    private var keepAliveView: View? = null
 
     private lateinit var iconContainer: FrameLayout
     private lateinit var iconButton: ImageView
@@ -87,6 +88,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
                 stopSelf(startId)
             }
+            ACTION_KEEPALIVE_SHOW -> showSinglePixelOverlay()
+            ACTION_KEEPALIVE_HIDE -> hideSinglePixelOverlay()
             ACTION_HIDE -> {
                 hideOverlay()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -102,6 +105,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             ACTION_KEYBOARD_CHANGED -> handleKeyboardChanged(intent)
             ACTION_REFRESH_LAYOUT -> refreshOverlayLayout()
         }
+        // 保活开关开启时，服务被拉起/重启后自动补挂单像素悬浮窗。
+        if (OpenLessAndroidPreferences.singlePixelKeepalive(this)) {
+            showSinglePixelOverlay()
+        }
         return START_STICKY
     }
 
@@ -110,6 +117,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             OpenLessOverlayBridge.listener = null
         }
         hideOverlay()
+        hideSinglePixelOverlay()
         if (instance === this) {
             instance = null
         }
@@ -279,6 +287,59 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             layoutParams = null
             false
         }
+    }
+
+    private fun showSinglePixelOverlay() = withOverlayLock {
+        if (keepAliveView?.isAttachedToWindow == true) return@withOverlayLock
+        if (!canDrawOverlays()) {
+            Log.w(TAG, "single-pixel keepalive skipped: no overlay permission")
+            return@withOverlayLock
+        }
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val params = WindowManager.LayoutParams(
+            1,
+            1,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            },
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+        }
+        val view = View(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            contentDescription = "OpenLessKeepAlive"
+            isClickable = false
+            isFocusable = false
+        }
+        try {
+            wm.addView(view, params)
+            keepAliveView = view
+            Log.i(TAG, "single-pixel keepalive overlay shown")
+        } catch (error: Throwable) {
+            Log.w(TAG, "single-pixel keepalive show failed", error)
+        }
+    }
+
+    private fun hideSinglePixelOverlay() = withOverlayLock {
+        val view = keepAliveView ?: return@withOverlayLock
+        try {
+            if (view.isAttachedToWindow) {
+                (getSystemService(WINDOW_SERVICE) as WindowManager).removeViewImmediate(view)
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "single-pixel keepalive hide failed", error)
+        }
+        keepAliveView = null
     }
 
     private fun canDrawOverlays(): Boolean {
@@ -848,6 +909,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val ACTION_START_RECORDING = "com.openless.app.overlay.START_RECORDING"
         const val ACTION_LAN_START_RECORDING = "com.openless.app.overlay.LAN_START_RECORDING"
         const val ACTION_LAN_RELEASE = "com.openless.app.overlay.LAN_RELEASE"
+        const val ACTION_KEEPALIVE_SHOW = "com.openless.app.overlay.KEEPALIVE_SHOW"
+        const val ACTION_KEEPALIVE_HIDE = "com.openless.app.overlay.KEEPALIVE_HIDE"
         const val ACTION_KEYBOARD_CHANGED = "com.openless.app.overlay.KEYBOARD_CHANGED"
         const val EXTRA_KEYBOARD_VISIBLE = "keyboard_visible"
         const val EXTRA_KEYBOARD_TOP = "keyboard_top"

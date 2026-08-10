@@ -17,6 +17,7 @@ object OpenLessAndroidPreferences {
     private const val KEY_OVERLAY_LEFT_SWIPE_ACTION = "androidOverlayLeftSwipeAction"
     private const val KEY_OVERLAY_CANCEL_SWIPE_DIRECTION = "androidOverlayCancelSwipeDirection"
     private const val KEY_OVERLAY_SIZE_DP = "androidOverlaySizeDp"
+    private const val KEY_SINGLE_PIXEL_KEEPALIVE = "androidSinglePixelKeepalive"
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
     private const val MAX_OVERLAY_SIZE_DP = 120
@@ -60,6 +61,11 @@ object OpenLessAndroidPreferences {
         return readPreferenceInt(context, KEY_OVERLAY_SIZE_DP)
             ?.coerceIn(MIN_OVERLAY_SIZE_DP, MAX_OVERLAY_SIZE_DP)
             ?: DEFAULT_OVERLAY_SIZE_DP
+    }
+
+    fun singlePixelKeepalive(context: Context): Boolean {
+        return readPreferenceString(context, KEY_SINGLE_PIXEL_KEEPALIVE)?.toBooleanStrictOrNull()
+            ?: false
     }
 
     private fun readPreferenceString(context: Context, key: String): String? {

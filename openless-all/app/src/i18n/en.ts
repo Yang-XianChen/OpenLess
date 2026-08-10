@@ -1201,6 +1201,9 @@ export const en: typeof zhCN = {
       androidOverlayCancelSwipeDirectionLabel: 'Cancel swipe direction',
       androidOverlaySizeLabel: 'Overlay size',
       androidOverlaySizeHint: 'Adjusts the floating button diameter and keeps its current position.',
+      androidSinglePixelKeepaliveLabel: 'Single-pixel keep-alive overlay',
+      androidSinglePixelKeepaliveEnabled: 'Enable a 1×1 non-interactive overlay to keep the process alive',
+      androidSinglePixelKeepaliveHint: 'Requires overlay permission; invisible and non-interactive, used only to keep the app alive.',
       androidInsertStrategy: {
         accessibility: 'Auto output to input field',
         clipboard: 'Clipboard only',

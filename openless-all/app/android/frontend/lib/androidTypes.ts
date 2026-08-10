@@ -69,7 +69,8 @@ export type AndroidPreferenceKey =
   | 'androidOverlayActivationMode'
   | 'androidOverlayLeftSwipeAction'
   | 'androidOverlayCancelSwipeDirection'
-  | 'androidOverlaySizeDp';
+  | 'androidOverlaySizeDp'
+  | 'androidSinglePixelKeepalive';
 
 export function normalizeAndroidOverlayTrigger(
   trigger: AndroidOverlayTrigger,

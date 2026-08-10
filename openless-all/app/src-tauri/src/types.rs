@@ -1168,6 +1168,9 @@ pub struct UserPreferences {
     /// Android: floating overlay control diameter in dp.
     #[serde(default = "default_android_overlay_size_dp")]
     pub android_overlay_size_dp: u32,
+    /// Android: 1x1 non-interactive overlay to keep the process alive.
+    #[serde(default)]
+    pub android_single_pixel_keepalive: bool,
 }
 
 impl UserPreferences {
@@ -1403,6 +1406,8 @@ struct UserPreferencesWire {
     android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
     #[serde(default = "default_android_overlay_size_dp")]
     android_overlay_size_dp: u32,
+    #[serde(default)]
+    android_single_pixel_keepalive: bool,
 }
 
 fn deserialize_selection_polish_hotkey<'de, D>(
@@ -1511,6 +1516,7 @@ impl Default for UserPreferencesWire {
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
+            android_single_pixel_keepalive: prefs.android_single_pixel_keepalive,
         }
     }
 }
@@ -1667,6 +1673,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_size_dp: normalize_android_overlay_size_dp(
                 wire.android_overlay_size_dp,
             ),
+            android_single_pixel_keepalive: wire.android_single_pixel_keepalive,
         })
     }
 }
@@ -2478,6 +2485,7 @@ impl Default for UserPreferences {
             android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
             ),
             android_overlay_size_dp: default_android_overlay_size_dp(),
+            android_single_pixel_keepalive: false,
         }
     }
 }

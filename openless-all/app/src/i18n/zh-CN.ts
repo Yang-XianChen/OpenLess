@@ -1199,6 +1199,9 @@ export const zhCN = {
       androidOverlayCancelSwipeDirectionLabel: '取消录音滑向',
       androidOverlaySizeLabel: '悬浮窗大小',
       androidOverlaySizeHint: '调整悬浮按钮直径，保存后在当前悬浮窗上生效并保留位置。',
+      androidSinglePixelKeepaliveLabel: '单像素悬浮窗保活',
+      androidSinglePixelKeepaliveEnabled: '启用 1×1 不可交互悬浮窗保持进程存活',
+      androidSinglePixelKeepaliveHint: '需授予悬浮窗权限；仅用于保活，不显示任何内容、不可交互。',
       androidInsertStrategy: {
         accessibility: '自动输出到输入框',
         clipboard: '仅剪贴板',

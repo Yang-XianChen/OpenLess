@@ -36,6 +36,38 @@ pub fn release_remote_recording() -> Result<(), String> {
     })
 }
 
+/// 显示单像素不可交互悬浮窗（保活用）。
+pub fn show_single_pixel_keepalive() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::start_service_action(
+                env,
+                context,
+                "com.openless.app.OpenLessOverlayService",
+                "com.openless.app.overlay.KEEPALIVE_SHOW",
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// 隐藏单像素保活悬浮窗。
+pub fn hide_single_pixel_keepalive() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::start_service_action(
+                env,
+                context,
+                "com.openless.app.OpenLessOverlayService",
+                "com.openless.app.overlay.KEEPALIVE_HIDE",
+            )
+        })?;
+    }
+    Ok(())
+}
+
 pub fn notify_capsule_state(payload: &CapsulePayload) {
     #[cfg(target_os = "android")]
     {

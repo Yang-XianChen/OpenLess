@@ -42,6 +42,7 @@ function pickAndroidPrefs(settings: UserPreferences): AndroidPrefsSlice {
     androidOverlayLeftSwipeAction: settings.androidOverlayLeftSwipeAction,
     androidOverlayCancelSwipeDirection: settings.androidOverlayCancelSwipeDirection,
     androidOverlaySizeDp: settings.androidOverlaySizeDp,
+    androidSinglePixelKeepalive: settings.androidSinglePixelKeepalive,
   };
 }
 
@@ -495,6 +496,23 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
           </div>
           <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
             {t('settings.permissions.androidOverlaySizeHint')}
+          </span>
+        </div>
+      </SettingRow>
+      <SettingRow label={t('settings.permissions.androidSinglePixelKeepaliveLabel')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={androidPrefs?.androidSinglePixelKeepalive ?? false}
+              onChange={(event) => { void updateAndroidPref('androidSinglePixelKeepalive', event.target.checked); }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
+              {t('settings.permissions.androidSinglePixelKeepaliveEnabled')}
+            </span>
+          </label>
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+            {t('settings.permissions.androidSinglePixelKeepaliveHint')}
           </span>
         </div>
       </SettingRow>
