@@ -251,7 +251,85 @@ jobs:
             - 手机打开 OpenLess 后监听 `0.0.0.0:45678`
             - 真机（arm64）下载 `..._arm64-v8a.apk`；x86_64 模拟器下载 `..._x86_64.apk`
             - 这是 **release 签名构建**（OpenLess 个人 keystore 签名，可安装）；覆盖安装前先卸载旧版
+            - 电脑端客户端：`openless-remote-client-linux-x86_64` / `openless-remote-client-linux-aarch64`
 
             协议与电脑端用法见仓库 `openless-all/remote-client/README.md`。
           files: ${{ steps.apk.outputs.release_files }}
+          fail_on_unmatched_files: true
+
+  build-remote-client:
+    name: Build remote client (${{ matrix.asset-name }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            asset-name: openless-remote-client-linux-x86_64
+          - platform: ubuntu-22.04-arm
+            rust-target: aarch64-unknown-linux-gnu
+            asset-name: openless-remote-client-linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/remote-client -> target'
+
+      - name: Install Linux build deps
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libxcb1-dev libwayland-dev
+
+      - name: Build release binary
+        shell: bash
+        working-directory: 'openless-all/remote-client'
+        run: cargo build --release --target "${{ matrix.rust-target }}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-client-${{ matrix.asset-name }}
+          path: openless-all/remote-client/target/${{ matrix.rust-target }}/release/openless-remote-client
+          if-no-files-found: error
+
+  publish-remote-client:
+    name: Publish remote client binaries
+    needs: [build-android-lan, build-remote-client]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download client binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: remote-client-*
+          path: client
+          merge-multiple: true
+
+      - name: Collect binary paths
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          find client -type f -name 'openless-remote-client-linux-*' -print > "$RUNNER_TEMP/client-files.txt"
+          cat "$RUNNER_TEMP/client-files.txt"
+          files=""
+          while IFS= read -r f; do
+            files="${files}${f}"$'\n'
+          done < "$RUNNER_TEMP/client-files.txt"
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$files" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Upload remote client binaries to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          files: ${{ steps.collect.outputs.files }}
           fail_on_unmatched_files: true

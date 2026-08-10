@@ -5,7 +5,7 @@ name: Release Tauri (cross-platform)
 #   - 手动 dispatch（用于测试构建,不发版）
 #
 # 输出：
-#   macOS arm64/x64 .dmg + Windows x64 .msi/.exe + Linux x64 .deb/.rpm/.AppImage，自动作为 GitHub Release 资产上传。
+#   macOS arm64/x64 .dmg + Windows x64 .msi/.exe + Linux x64/arm64 .deb/.rpm/.AppImage，自动作为 GitHub Release 资产上传。
 #
 # macOS 分发：
 #   - 配好 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
@@ -45,6 +45,10 @@ jobs:
             rust-target: x86_64-unknown-linux-gnu
             updater-target: linux
             updater-arch: x86_64
+          - platform: ubuntu-22.04-arm
+            rust-target: aarch64-unknown-linux-gnu
+            updater-target: linux
+            updater-arch: aarch64
     runs-on: ${{ matrix.platform }}
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -80,7 +84,7 @@ jobs:
           workspaces: 'openless-all/app/src-tauri -> target'
 
       - name: Install Linux bundle deps
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-22.04')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -367,7 +371,7 @@ jobs:
 
       # ── Linux：先编译 fcitx5 插件，再产 deb / rpm / AppImage ──
       - name: Build fcitx5 plugin
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-22.04')
         shell: bash
         working-directory: 'openless-all/scripts/linux-fcitx5-plugin'
         run: |
@@ -436,7 +440,7 @@ jobs:
           cp openless.conf "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/"
 
       - name: Build (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-22.04')
         shell: bash
         working-directory: 'openless-all/app'
         env:
@@ -576,20 +580,20 @@ jobs:
           if-no-files-found: error
 
       - name: Upload fcitx5 plugin artifact (standalone)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-22.04')
         uses: actions/upload-artifact@v4
         with:
-          name: openless-fcitx5-plugin-linux-x64
+          name: openless-fcitx5-plugin-linux-${{ matrix.updater-arch }}
           path: |
             ${{ github.workspace }}/openless-all/scripts/linux-fcitx5-plugin/build/libopenless.so
             ${{ github.workspace }}/openless-all/scripts/linux-fcitx5-plugin/build/openless.conf
           if-no-files-found: error
 
       - name: Upload Linux artifacts
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-22.04')
         uses: actions/upload-artifact@v4
         with:
-          name: openless-linux-x64
+          name: openless-linux-${{ matrix.updater-arch }}
           path: |
             openless-all/app/src-tauri/target/release/bundle/deb/*.deb
             openless-all/app/src-tauri/target/release/bundle/rpm/*.rpm
@@ -597,13 +601,13 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Linux updater artifacts
-        if: matrix.platform == 'ubuntu-22.04' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        if: startsWith(matrix.platform, 'ubuntu-22.04') && env.TAURI_SIGNING_PRIVATE_KEY != ''
         uses: actions/upload-artifact@v4
         with:
-          name: openless-linux-x64-updater
+          name: openless-linux-${{ matrix.updater-arch }}-updater
           path: |
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage.sig
-            openless-all/app/src-tauri/target/release/bundle/latest-linux-x86_64*.json
+            openless-all/app/src-tauri/target/release/bundle/latest-linux-${{ matrix.updater-arch }}*.json
           if-no-files-found: error
 
       # ── tag 推送时,同步上传到 GitHub Release ──
