@@ -341,6 +341,19 @@ fn send_json(socket: &mut ClientSocket, value: serde_json::Value) -> Result<(), 
 }
 
 fn insert_text(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        match commit_text_via_fcitx(text) {
+            Ok(()) => {
+                println!("[remote] committed {} chars via fcitx5", text.chars().count());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("[remote] fcitx5 CommitText failed: {error}; falling back to clipboard paste");
+            }
+        }
+    }
+
     let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard: {e}"))?;
     clipboard
         .set_text(text.to_string())
@@ -382,6 +395,19 @@ fn insert_text(text: &str) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn commit_text_via_fcitx(text: &str) -> Result<(), String> {
+    use dbus::blocking::BlockingSender;
+    let conn =
+        dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
+    let msg = dbus::Message::new_method_call(DBUS_DEST, DBUS_PATH, DBUS_IFACE, "CommitText")
+        .map_err(|e| format!("build msg: {e}"))?
+        .append1(text);
+    conn.send_with_reply_and_block(msg, std::time::Duration::from_secs(3))
+        .map_err(|e| format!("CommitText: {e}"))?;
+    Ok(())
 }
 
 fn parse_hotkey(raw: &str) -> Result<HotKey, String> {
