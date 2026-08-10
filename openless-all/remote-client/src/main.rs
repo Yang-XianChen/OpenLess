@@ -47,6 +47,8 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
+    let _ = SESSION.set(Mutex::new(None));
+
     if args.fcitx {
         run_fcitx_toggle(&args.address);
     }
@@ -71,7 +73,6 @@ fn main() {
         std::process::exit(1);
     }
 
-    let _ = SESSION.set(Mutex::new(None));
     let mut recording = false;
     println!(
         "[remote] listening {} -> ws://{} ({})",
