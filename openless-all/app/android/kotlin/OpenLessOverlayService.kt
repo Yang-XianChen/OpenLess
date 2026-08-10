@@ -167,6 +167,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun showOverlay() = withOverlayLock {
+        if (!isDictationOverlayEnabled()) {
+            Log.i(TAG, "overlay show skipped: trigger=off")
+            return@withOverlayLock
+        }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
         overlayRoots.lastOrNull()?.let { existing ->
@@ -189,6 +193,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun replaceOverlay() = withOverlayLock {
+        if (!isDictationOverlayEnabled()) {
+            Log.i(TAG, "overlay replace skipped: trigger=off")
+            return@withOverlayLock
+        }
         windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
         val removed = clearAllOverlayRoots()
@@ -469,7 +477,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         keyboardVisible = visible
         Log.i(TAG, "keyboard changed visible=$visible")
         if (visible) {
-            showOverlay()
+            if (isDictationOverlayEnabled()) {
+                showOverlay()
+            }
             return
         }
         if (!recording && !processing) {
@@ -861,6 +871,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun isTapActivationMode(): Boolean {
         return OpenLessAndroidPreferences.overlayActivationMode(this) == "tap"
+    }
+
+    private fun isDictationOverlayEnabled(): Boolean {
+        return OpenLessAndroidPreferences.overlayTriggerMode(this) != "off"
     }
 
     private fun showToast(message: String) {

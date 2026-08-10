@@ -17,6 +17,7 @@ pub enum AndroidOverlayTrigger {
     Background,
     Keyboard,
     Always,
+    Off,
 }
 
 impl AndroidOverlayTrigger {

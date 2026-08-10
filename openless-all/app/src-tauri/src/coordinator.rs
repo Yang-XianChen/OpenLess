@@ -1333,6 +1333,7 @@ impl Coordinator {
                     AndroidOverlayTrigger::Background => "background",
                     AndroidOverlayTrigger::Keyboard => "keyboard",
                     AndroidOverlayTrigger::Always => "always",
+                    AndroidOverlayTrigger::Off => "off",
                 }
             }
             if from == to {
@@ -1345,14 +1346,18 @@ impl Coordinator {
             );
             match (from, to) {
                 (
-                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
+                    AndroidOverlayTrigger::Background
+                        | AndroidOverlayTrigger::Keyboard
+                        | AndroidOverlayTrigger::Off,
                     AndroidOverlayTrigger::Always,
                 ) => {
                     let _ = crate::android::replace_android_overlay();
                 }
                 (
                     AndroidOverlayTrigger::Always,
-                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
+                    AndroidOverlayTrigger::Background
+                        | AndroidOverlayTrigger::Keyboard
+                        | AndroidOverlayTrigger::Off,
                 ) => {
                     let _ = crate::android::hide_android_overlay();
                 }
@@ -1370,7 +1375,9 @@ impl Coordinator {
                 AndroidOverlayTrigger::Always => {
                     let _ = crate::android::replace_android_overlay();
                 }
-                AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
+                AndroidOverlayTrigger::Background
+                | AndroidOverlayTrigger::Keyboard
+                | AndroidOverlayTrigger::Off => {
                     let _ = crate::android::hide_android_overlay();
                 }
             }

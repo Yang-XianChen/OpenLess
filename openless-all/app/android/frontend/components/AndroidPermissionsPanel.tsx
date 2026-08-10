@@ -413,6 +413,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
             <option value="background">{t('settings.permissions.androidOverlayTrigger.background')}</option>
             <option value="keyboard" disabled>{t('settings.permissions.androidOverlayTrigger.keyboard')}</option>
             <option value="always">{t('settings.permissions.androidOverlayTrigger.always')}</option>
+            <option value="off">{t('settings.permissions.androidOverlayTrigger.off')}</option>
           </select>
           <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
             {t(`settings.permissions.androidOverlayTriggerHint.${androidPrefs?.androidOverlayTrigger ?? 'background'}`)}

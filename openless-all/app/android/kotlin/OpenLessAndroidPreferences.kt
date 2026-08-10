@@ -21,7 +21,7 @@ object OpenLessAndroidPreferences {
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
     private const val MAX_OVERLAY_SIZE_DP = 120
-    private val VALID_OVERLAY_TRIGGERS = setOf("background", "always")
+    private val VALID_OVERLAY_TRIGGERS = setOf("background", "always", "off")
     private val VALID_OVERLAY_ACTIVATION_MODES = setOf("tap", "long_press")
     private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
     private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")

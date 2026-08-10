@@ -200,6 +200,7 @@ pub fn overlay_trigger_mode_name() -> &'static str {
         crate::types::AndroidOverlayTrigger::Background => "background",
         crate::types::AndroidOverlayTrigger::Keyboard => "keyboard",
         crate::types::AndroidOverlayTrigger::Always => "always",
+        crate::types::AndroidOverlayTrigger::Off => "off",
     }
 }
 

@@ -1216,11 +1216,13 @@ export const en: typeof zhCN = {
         background: 'When app is backgrounded',
         keyboard: 'When keyboard appears',
         always: 'Always visible',
+        off: 'Off',
       },
       androidOverlayTriggerHint: {
         background: 'Simple and battery-friendly; no overlay while typing in other apps.',
         keyboard: 'This mode is shelved. Existing settings are moved back to background.',
         always: 'Always available, but permanently on screen.',
+        off: 'Fully hides the dictation button; the single-pixel keep-alive overlay can still be enabled independently.',
       },
       androidOverlayTriggerDisabled: {
         keyboard: 'Keyboard-triggered display is shelved. Overlay gestures will replace keyboard detection.',
