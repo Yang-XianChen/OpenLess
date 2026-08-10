@@ -1,0 +1,63 @@
+name: Android LAN APK Publish (existing artifacts)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag / release name (rerun with same tag replaces the release)"
+        required: false
+        default: android-lan-preview
+      run_id:
+        description: "Workflow run id that produced the debug APK artifacts"
+        required: false
+        default: "31393556434"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK artifacts from existing run
+        uses: actions/download-artifact@v4
+        with:
+          run_id: ${{ github.event.inputs.run_id }}
+          path: apks
+
+      - name: Collect APK files
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          find apks -type f -name '*.apk' -print
+          find apks -type f -name '*.apk' -print > "$RUNNER_TEMP/apk-files.txt"
+          echo "release_files<<EOF" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/apk-files.txt" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Reset release (idempotent rerun)
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
+
+      - name: Publish APK release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          name: OpenLess Android LAN ${{ github.event.inputs.tag }}
+          body: |
+            ### OpenLess Android（局域网远程听写版）
+
+            电脑端 remote-client 通过 WebSocket 触发手机录音/处理并回传文本。
+
+            - 手机打开 OpenLess 后监听 `0.0.0.0:45678`
+            - 真机（arm64）下载 `..._arm64-v8a.apk`；x86_64 模拟器下载 `..._x86_64.apk`
+            - 这是 **debug 未签名构建**：覆盖安装前先卸载旧版，安装时允许「安装未知应用」
+
+            协议与电脑端用法见仓库 `openless-all/remote-client/README.md`。
+          files: ${{ steps.apk.outputs.release_files }}
+          fail_on_unmatched_files: true
