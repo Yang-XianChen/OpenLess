@@ -129,6 +129,7 @@ jobs:
       - name: Collect split APKs
         id: apk
         shell: bash
+        working-directory: openless-all/app
         env:
           ONLY_ARM64: ${{ github.event.inputs.only_arm64 }}
         run: |
