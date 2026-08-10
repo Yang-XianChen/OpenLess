@@ -31,7 +31,7 @@ pub use native_bridge::{
     refresh_overlay_layout, register_android_coordinator, replace_overlay, show_overlay,
 };
 pub use overlay::{
-    get_android_overlay_status, hide_android_overlay, refresh_android_overlay_if_visible,
-    refresh_android_overlay_layout, replace_android_overlay, request_android_overlay_permission,
-    show_android_overlay, AndroidOverlayPermissionResult,
+    apply_single_pixel_keepalive, get_android_overlay_status, hide_android_overlay,
+    refresh_android_overlay_if_visible, refresh_android_overlay_layout, replace_android_overlay,
+    request_android_overlay_permission, show_android_overlay, AndroidOverlayPermissionResult,
 };
