@@ -1,0 +1,15 @@
+[package]
+name = "openless-remote-client"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal headless desktop client for OpenLess Android LAN dictation"
+license = "MIT"
+
+[dependencies]
+arboard = "3"
+clap = { version = "4", features = ["derive"] }
+enigo = "0.2"
+global-hotkey = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = { version = "0.24", features = ["handshake"] }

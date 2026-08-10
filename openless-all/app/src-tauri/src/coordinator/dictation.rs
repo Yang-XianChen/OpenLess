@@ -3206,6 +3206,13 @@ async fn insert_final_text(
     let paste_shortcut = prefs.paste_shortcut;
     #[cfg(target_os = "android")]
     {
+        if inner.remote_capture_mode.load(Ordering::SeqCst) {
+            log::info!(
+                "[coord] remote capture mode active — skipping phone-side insertion (chars={})",
+                text.chars().count()
+            );
+            return InsertStatus::Inserted;
+        }
         crate::android::android_insert_with_strategy(
             &inner.inserter,
             text,

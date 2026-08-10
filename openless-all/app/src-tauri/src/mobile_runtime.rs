@@ -42,6 +42,7 @@ pub fn run() {
             #[cfg(target_os = "android")]
             {
                 crate::android::register_android_coordinator(coordinator.clone());
+                crate::android::lan_server::start(coordinator.clone());
                 coordinator.apply_android_overlay_on_startup();
             }
             Ok(())
