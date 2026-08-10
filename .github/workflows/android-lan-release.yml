@@ -1,0 +1,218 @@
+name: Android LAN APK Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag / release name (rerun with same tag replaces the release)"
+        required: false
+        default: android-lan-preview
+      only_arm64:
+        description: "Only build/upload arm64-v8a APK (true) or all four ABIs (false)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-lan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java 17 (Zulu)
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install NDK and accept SDK licenses
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;26.1.10909125"
+          ndk_dir="$ANDROID_HOME/ndk/26.1.10909125"
+          yes | sdkmanager --licenses >/dev/null || true
+          echo "ANDROID_NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-linux-android,
+            armv7-linux-androideabi,
+            i686-linux-android,
+            x86_64-linux-android
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: openless-all/app/src-tauri -> target
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install npm deps
+        working-directory: openless-all/app
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: openless-all/app
+        run: npm run build
+
+      - name: Initialize Android project
+        working-directory: openless-all/app
+        run: npm run tauri -- android init --ci
+
+      - name: Copy Android scaffolding (Kotlin + XML)
+        working-directory: openless-all/app
+        run: node scripts/copy-android-scaffolding.mjs
+
+      - name: Merge APK v1 manifest permissions
+        working-directory: openless-all/app
+        run: node scripts/merge-android-v1-manifest.mjs
+
+      - name: Merge overlay / accessibility manifest
+        working-directory: openless-all/app
+        run: node scripts/merge-android-overlay-manifest.mjs
+
+      - name: Merge Shizuku manifest
+        working-directory: openless-all/app
+        run: node scripts/merge-android-shizuku-manifest.mjs
+
+      - name: Patch Shizuku Gradle dependencies
+        working-directory: openless-all/app
+        run: node scripts/patch-android-shizuku-deps.mjs
+
+      - name: Merge updater / install manifest
+        working-directory: openless-all/app
+        run: node scripts/merge-android-updater-manifest.mjs
+
+      - name: Prime Gradle wrapper
+        working-directory: openless-all/app
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android --version --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $([ "$attempt" -eq 1 ] && echo 15 || echo 30)
+            fi
+          done
+          exit 1
+
+      - name: Build Android debug APKs
+        working-directory: openless-all/app
+        run: npm run tauri:android:build:debug
+
+      - name: Collect split APKs
+        id: apk
+        shell: bash
+        env:
+          ONLY_ARM64: ${{ github.event.inputs.only_arm64 }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          root = Path("src-tauri/gen/android")
+          version = json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
+          only_arm64 = os.environ.get("ONLY_ARM64", "false").lower() in ("true", "1", "yes")
+          out_dir = Path(os.environ["RUNNER_TEMP"]) / "openless-android-lan-apks"
+          out_dir.mkdir(parents=True, exist_ok=True)
+
+          candidates = sorted(
+              apk for apk in root.rglob("*.apk") if "outputs" in apk.parts
+          )
+          if not candidates:
+              print("::error::No APK found under src-tauri/gen/android/**/outputs/")
+              sys.exit(1)
+
+          expected = {
+              "arm64-v8a": "arm64-v8a",
+              "armeabi-v7a": "armeabi-v7a",
+              "x86": "x86",
+              "x86_64": "x86_64",
+          }
+          found = {}
+          for apk in candidates:
+              with zipfile.ZipFile(apk) as archive:
+                  abis = sorted({
+                      name.split("/")[1]
+                      for name in archive.namelist()
+                      if name.startswith("lib/") and len(name.split("/")) >= 3
+                  })
+              if len(abis) != 1:
+                  print(f"::error::{apk} contains ABI directories {abis}; expected one")
+                  sys.exit(1)
+              abi = abis[0]
+              if abi not in expected or abi in found:
+                  print(f"::error::unexpected/duplicate ABI {abi} in {apk}")
+                  sys.exit(1)
+              if only_arm64 and abi != "arm64-v8a":
+                  continue
+              dest = out_dir / f"OpenLess_{version}_android-lan_{abi}.apk"
+              shutil.copy2(apk, dest)
+              found[abi] = dest
+              print(f"Collected {abi}: {dest}")
+
+          if only_arm64:
+              if "arm64-v8a" not in found:
+                  print("::error::arm64-v8a APK not found")
+                  sys.exit(1)
+          elif len(found) != len(expected):
+              print(f"::error::missing ABIs: {sorted(set(expected) - set(found))}")
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("out_dir=" + str(out_dir) + "\n")
+              output.write("release_files<<EOF\n")
+              for apk in sorted(found.values()):
+                  output.write(str(apk) + "\n")
+              output.write("EOF\n")
+          PY
+
+      - name: Reset release (idempotent rerun)
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
+
+      - name: Publish APK release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          name: OpenLess Android LAN ${{ github.event.inputs.tag }}
+          body: |
+            ### OpenLess Android（局域网远程听写版）
+
+            电脑端 remote-client 通过 WebSocket 触发手机录音/处理并回传文本。
+
+            - 手机打开 OpenLess 后监听 `0.0.0.0:45678`
+            - 真机（arm64）下载 `..._arm64-v8a.apk`；x86_64 模拟器下载 `..._x86_64.apk`
+            - 这是 **debug 未签名构建**：覆盖安装前先卸载旧版，安装时允许「安装未知应用」
+
+            协议与电脑端用法见仓库 `openless-all/remote-client/README.md`。
+          files: ${{ steps.apk.outputs.release_files }}
+          fail_on_unmatched_files: true
