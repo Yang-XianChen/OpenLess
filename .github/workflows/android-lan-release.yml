@@ -100,15 +100,6 @@ jobs:
         working-directory: openless-all/app
         run: node scripts/merge-android-updater-manifest.mjs
 
-      - name: Configure Android release signing
-        working-directory: openless-all/app
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: node scripts/configure-android-release-signing.mjs
-
       - name: Prime Gradle wrapper
         working-directory: openless-all/app
         shell: bash
@@ -207,6 +198,27 @@ jobs:
                   output.write(str(apk) + "\n")
               output.write("EOF\n")
           PY
+
+      - name: Sign APK with release keystore
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          bt_dir=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/openless-release.keystore"
+          for apk in "${{ steps.apk.outputs.out_dir }}"/*.apk; do
+            echo "Signing $apk"
+            "$bt_dir/apksigner" sign \
+              --ks "$RUNNER_TEMP/openless-release.keystore" \
+              --ks-key-alias "$KS_ALIAS" \
+              --ks-pass "pass:$KS_PASS" \
+              --key-pass "pass:$KS_PASS" \
+              --out "$apk.signed" "$apk"
+            mv "$apk.signed" "$apk"
+          done
 
       - name: Verify APK signature
         shell: bash
