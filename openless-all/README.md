@@ -15,6 +15,22 @@ npm ci
 npm run tauri dev
 ```
 
+## 局域网远程听写（Android ↔ PC）
+
+Android 版 OpenLess 启动后在 `0.0.0.0:45678` 监听 WebSocket（见
+`app/src-tauri/src/android/lan_server.rs`）。电脑端可用极简无界面客户端
+`remote-client/` 通过全局热键触发手机录音/处理，并把最终文本粘贴到电脑当前光标：
+
+```bash
+cd remote-client
+cargo build --release
+./target/release/openless-remote-client --address 192.168.1.20:45678 \
+  --hotkey "Ctrl+Shift+Space"
+```
+
+按住所选热键 = 手机开始录音；松开 = 手机结束会话、回传润色后的文本并粘贴。
+协议与限制见 `remote-client/README.md`。
+
 ## macOS Build
 
 Use the project build script instead of calling `tauri build` directly:

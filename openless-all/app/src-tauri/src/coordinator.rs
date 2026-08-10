@@ -885,6 +885,9 @@ struct Inner {
     remote_locale: Mutex<String>,
     #[cfg(not(mobile))]
     remote_no_insert: AtomicBool,
+    /// Android 局域网远程采集模式：由手机端 LAN 服务置位，置位期间跳过手机本地落字，
+    /// 最终文本通过历史记录由 LAN 服务回传给电脑。
+    remote_capture_mode: AtomicBool,
     /// Less Computer 连续对话：true=浮窗里已有进行中的会话，下一轮 `claude --continue` 续上下文；
     /// 关闭浮窗（dismiss）复位为 false，下次说话开新会话。
     less_computer_conversation: AtomicBool,
@@ -1083,6 +1086,7 @@ impl Coordinator {
                     remote_locale: Mutex::new(String::from("zh-CN")),
                     #[cfg(not(mobile))]
                     remote_no_insert: AtomicBool::new(false),
+                    remote_capture_mode: AtomicBool::new(false),
                     less_computer_conversation: AtomicBool::new(false),
                 }),
             }
@@ -1210,6 +1214,7 @@ impl Coordinator {
                 remote_locale: Mutex::new(String::from("zh-CN")),
                 #[cfg(not(mobile))]
                 remote_no_insert: AtomicBool::new(false),
+                remote_capture_mode: AtomicBool::new(false),
                 less_computer_conversation: AtomicBool::new(false),
             }),
         }
@@ -2083,6 +2088,21 @@ impl Coordinator {
         self.inner
             .remote_no_insert
             .store(no_insert, Ordering::SeqCst);
+    }
+
+    /// 手机端局域网远程采集模式：置位后本次会话不在手机本地插入文本，
+    /// 由 LAN 服务读取历史记录把 final_text 回传给电脑。
+    #[cfg(target_os = "android")]
+    pub fn set_remote_capture_mode(&self, enabled: bool) {
+        self.inner
+            .remote_capture_mode
+            .store(enabled, Ordering::SeqCst);
+    }
+
+    /// 最近一条已落历史的会话（newest-first）。LAN 服务在 stop 后轮询此方法
+    /// 直到会话 id 变化，取回 final_text 回传电脑。
+    pub fn last_finished_session(&self) -> Option<crate::types::DictationSession> {
+        self.history().list().ok()?.into_iter().next()
     }
 
     #[cfg(not(mobile))]

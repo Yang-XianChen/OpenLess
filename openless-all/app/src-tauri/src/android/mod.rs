@@ -1,6 +1,7 @@
 //! Android platform integration (JNI, overlay, accessibility, insert).
 
 pub mod accessibility;
+pub mod lan_server;
 pub mod shizuku;
 #[cfg(target_os = "android")]
 pub mod insert;
