@@ -109,6 +109,7 @@ const previousPrefs: UserPreferences = {
   androidOverlayLeftSwipeAction: 'translation',
   androidOverlayCancelSwipeDirection: 'up',
   androidOverlaySizeDp: 72,
+  androidSinglePixelKeepalive: false,
 };
 
 const nextPrefs: UserPreferences = {

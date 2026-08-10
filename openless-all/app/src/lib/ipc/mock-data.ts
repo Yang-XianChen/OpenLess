@@ -124,6 +124,7 @@ export let mockSettings: UserPreferences = {
     androidOverlayLeftSwipeAction: "translation",
     androidOverlayCancelSwipeDirection: "up",
     androidOverlaySizeDp: 72,
+    androidSinglePixelKeepalive: false,
 }
 
 const mockFullStylePrompts: StyleSystemPrompts = {
