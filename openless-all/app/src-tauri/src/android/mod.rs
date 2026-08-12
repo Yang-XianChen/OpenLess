@@ -40,7 +40,7 @@ pub use shizuku::{
 pub fn get_android_keepalive_status() -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
-        use jni::objects::JValue;
+        use ::jni::objects::JValue;
 
         let result = crate::android::jni::android::with_android_env(|env, context| {
             let class = crate::android::jni::android::load_context_class(
@@ -61,7 +61,7 @@ pub fn get_android_keepalive_status() -> serde_json::Value {
                 return Err("getKeepaliveStatusJson returned null".to_string());
             }
             let text = env
-                .get_string(&jni::objects::JString::from(value))
+                .get_string(&::jni::objects::JString::from(value))
                 .map_err(|error| format!("read keepalive status json: {error}"))?
                 .to_string_lossy()
                 .into_owned();
@@ -104,7 +104,7 @@ pub fn get_android_keepalive_status() -> serde_json::Value {
 fn call_android_settings_method(method: &str) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        use jni::objects::JValue;
+        use ::jni::objects::JValue;
         crate::android::jni::android::with_android_env(|env, context| {
             let class = crate::android::jni::android::load_context_class(
                 env,
