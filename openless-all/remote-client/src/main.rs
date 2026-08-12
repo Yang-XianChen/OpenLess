@@ -74,6 +74,14 @@ enum SessionEvent {
     Lost(String),
 }
 
+/// fcitx5 插件发来的右 Alt 热键事件。
+enum HotkeyEvent {
+    Press,
+    Release,
+    /// 右 Alt 按住期间又按了其它键（例如 Alt+Left/Right 前进后退）。
+    Combined,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClientState {
     Idle,
@@ -96,7 +104,7 @@ struct Args {
     /// 触发热键，例如 Ctrl+Shift+Space
     #[arg(long, default_value = "Ctrl+Shift+Space")]
     hotkey: String,
-    /// 切换模式：按一下开始，再按一下结束（默认按住说话模式）
+    /// 切换模式：按下并释放开始，再按下并释放结束（默认释放开始、再次按下结束）
     #[arg(long)]
     toggle: bool,
     /// 使用 fcitx5 DBus 热键/输入法通道（Wayland 下捕获右 Alt 需要）
@@ -173,7 +181,7 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
         }
     };
 
-    let (tx, rx) = mpsc::channel::<bool>();
+    let (tx, rx) = mpsc::channel::<HotkeyEvent>();
     if let Err(error) = conn.add_match(rule, move |args: (u32, u32, bool), _conn, msg| {
         let member: String = msg
             .member()
@@ -181,7 +189,13 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
             .map(|m| m.to_string())
             .unwrap_or_default();
         if member == "DictationKeyEvent" {
-            let _ = tx.send(args.2);
+            let _ = tx.send(if args.2 {
+                HotkeyEvent::Press
+            } else {
+                HotkeyEvent::Release
+            });
+        } else if member == "DictationKeyCombined" {
+            let _ = tx.send(HotkeyEvent::Combined);
         }
         true
     }) {
@@ -205,7 +219,11 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
 
     println!(
         "[remote] fcitx5 Right Alt active ({})",
-        if toggle { "toggle" } else { "hold to talk" }
+        if toggle {
+            "tap to toggle"
+        } else {
+            "release to start, press to stop"
+        }
     );
     if auto_discover {
         start_background_scanner();
@@ -213,32 +231,55 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
     let (event_tx, event_rx) = mpsc::channel::<SessionEvent>();
     let mut state = ClientState::Idle;
     let mut session_address: Option<String> = None;
+    let mut alt_down = false;
+    let mut alt_combined = false;
     loop {
         let _ = conn.process(Duration::from_millis(200));
         while let Ok(event) = event_rx.try_recv() {
             state = handle_session_event(event, &mut session_address);
         }
-        while let Ok(is_press) = rx.try_recv() {
-            let should_start = is_press && state == ClientState::Idle;
-            let should_stop = !is_press && !toggle && state == ClientState::Recording
-                || is_press && toggle && state == ClientState::Recording;
-            if should_start {
-                match start_flow(
-                    address.as_deref(),
-                    auto_discover,
-                    event_tx.clone(),
-                    &client_id,
-                ) {
-                    Ok(found) => {
-                        session_address = Some(found);
-                        state = ClientState::Recording;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                HotkeyEvent::Press => {
+                    alt_down = true;
+                    alt_combined = false;
+                    // 非切换模式：录音中再次按下右 Alt 立即停止。
+                    if !toggle && state == ClientState::Recording {
+                        state = ClientState::Stopping;
+                        if let Some(address) = session_address.take() {
+                            stop_flow(&address);
+                        }
                     }
-                    Err(error) => eprintln!("[remote] start failed: {error}"),
                 }
-            } else if should_stop {
-                state = ClientState::Stopping;
-                if let Some(address) = session_address.take() {
-                    stop_flow(&address);
+                HotkeyEvent::Combined => {
+                    // Alt+其它键（如左右方向键）是系统快捷键，不触发听写。
+                    alt_combined = true;
+                }
+                HotkeyEvent::Release => {
+                    let clean_tap = alt_down && !alt_combined;
+                    alt_down = false;
+                    if !clean_tap {
+                        continue;
+                    }
+                    if state == ClientState::Idle {
+                        match start_flow(
+                            address.as_deref(),
+                            auto_discover,
+                            event_tx.clone(),
+                            &client_id,
+                        ) {
+                            Ok(found) => {
+                                session_address = Some(found);
+                                state = ClientState::Recording;
+                            }
+                            Err(error) => eprintln!("[remote] start failed: {error}"),
+                        }
+                    } else if toggle && state == ClientState::Recording {
+                        state = ClientState::Stopping;
+                        if let Some(address) = session_address.take() {
+                            stop_flow(&address);
+                        }
+                    }
                 }
             }
         }
