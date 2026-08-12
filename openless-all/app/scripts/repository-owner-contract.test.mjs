@@ -10,8 +10,6 @@ const legacyRepo = 'appergb/openless';
 const repositoryReferences = [
   '.github/ISSUE_TEMPLATE/config.yml',
   '.github/workflows/android-apk.yml',
-  '.github/workflows/release-tauri.yml',
-  'Casks/openless.rb',
   'README.md',
   'README.zh.md',
   'USAGE.md',

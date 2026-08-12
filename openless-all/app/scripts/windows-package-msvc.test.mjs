@@ -8,7 +8,6 @@ const appRoot = join(scriptsDir, "..");
 const repoRoot = join(appRoot, "..", "..");
 const scriptPath = join(scriptsDir, "windows-package-msvc.ps1");
 const launcherPath = join(scriptsDir, "windows-package-msvc.cmd");
-const ciWorkflowPath = join(repoRoot, ".github", "workflows", "release-tauri.yml");
 const imeBuildPath = join(scriptsDir, "windows-ime-build.ps1");
 const imeInstallSmokePath = join(scriptsDir, "windows-ime-install-smoke.ps1");
 const imeRegisterPath = join(scriptsDir, "windows-ime-register.ps1");
@@ -23,7 +22,6 @@ const wixFragmentPath = join(appRoot, "src-tauri", "wix", "openless-ime.wxs");
 
 const script = readFileSync(scriptPath, "utf8");
 const launcher = readFileSync(launcherPath, "utf8");
-const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const imeBuild = readFileSync(imeBuildPath, "utf8");
 const imeInstallSmoke = readFileSync(imeInstallSmokePath, "utf8");
 const imeRegister = readFileSync(imeRegisterPath, "utf8");
@@ -66,9 +64,7 @@ assert.match(script, /\[switch\]\$SkipRustInstall/, "script should support optin
 assert.match(script, /\[switch\]\$SkipNpmCi/, "script should support reusing existing node_modules");
 assert.match(script, /\[switch\]\$CleanArtifacts/, "script should support cleaning the output directory");
 assert.doesNotMatch(script, /WixTools314/, "MSVC packaging must not hard-code a single Tauri WiX tools version");
-assert.doesNotMatch(ciWorkflow, /WixTools314/, "CI MSI repair must not hard-code a single Tauri WiX tools version");
 assert.match(script, /-Filter "WixTools\*"/, "MSVC packaging should discover Tauri WiX tools by WixTools* glob");
-assert.match(ciWorkflow, /WixTools\*\\light\.exe/, "CI MSI repair should discover Tauri WiX tools by WixTools* glob");
 
 assert.match(imeBuild, /\[string\]\$OutputDirectory/, "IME build should support a package-specific output directory");
 assert.match(imeBuild, /\[string\]\$IntermediateDirectory/, "IME build should support a package-specific intermediate directory");
@@ -151,10 +147,6 @@ assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA
 assert.match(imeInstallSmoke, /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/, "install smoke should check the keyboard TSF category");
 assert.match(imeInstallSmoke, /foreach \(\$key in \$ExpectedBackendKeys\) \{[\s\S]*Assert-RegistryKey -View Registry64 -SubKey \$key[\s\S]*\}/, "install smoke should assert every backend-required registry key exists");
 assert.doesNotMatch(imeInstallSmoke, /foreach \(\$key in \$ExpectedBackendKeys\) \{[\s\S]*Write-Host "\[trace\] backend-required key: HKLM\\\$key"[\s\S]*\}/, "install smoke must not only trace backend-required registry keys");
-assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind nsis/, "CI should install and verify the NSIS artifact");
-assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind msi/, "CI should install and verify the MSI artifact");
-assert.match(ciWorkflow, /InstallerKind nsis[\s\S]*\$LASTEXITCODE -ne 0[\s\S]*NSIS installer smoke failed/, "CI should fail immediately when the NSIS smoke run fails");
-assert.match(ciWorkflow, /InstallerKind msi[\s\S]*\$LASTEXITCODE -ne 0[\s\S]*MSI installer smoke failed/, "CI should fail when the MSI smoke run fails");
 
 assert.match(launcher, /powershell\.exe/, "launcher should call powershell.exe");
 assert.match(launcher, /-ExecutionPolicy Bypass/, "launcher should bypass execution policy for this process");

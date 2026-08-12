@@ -3,14 +3,13 @@
 > 基于 [Open-Less/openless](https://github.com/Open-Less/openless) 的个人 fork。
 > 原版 README：[英文版](README.original.md) · [中文版](README.zh.md)
 
-OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转写、润色，并把最终文本插入到当前光标处。本 fork 在保留上游桌面版能力（macOS / Windows / Linux）的基础上，主要新增了 **Android 端**、**局域网远程听写** 和 **Linux 安装包 / 电脑端客户端**。
+OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转写、润色，并把最终文本插入到当前光标处。本 fork 的发布物只保留 **Android 端** 与 **电脑端 remote-client**；上游桌面端源码仍保留在仓库中备用，但不再发布桌面安装包。
 
 ## 这个 fork 新增了什么
 
 - **Android 平台支持**：完整的 Android 应用代码与 CI 构建，包含麦克风录音、ASR/润色、悬浮窗、无障碍插入、Shizuku 辅助、凭据保管库、应用内更新，以及单像素悬浮窗保活（锁屏/后台录音）等能力。
 - **局域网远程听写（Android ↔ PC）**：Android 端启动后监听 `0.0.0.0:45678`，电脑端通过 WebSocket 触发热键录音，手机完成听写后将文本回传并插入电脑当前光标。
 - **电脑端 remote-client**：极简无界面 Linux 客户端，支持局域网自动发现、热键触发、切换/按住模式、连接状态提示，以及 Wayland 下的 fcitx5 输入法通道（`--fcitx`）。
-- **Linux arm64 安装包**：本地交叉编译的 OpenLess v1.3.16 `.deb`，并附带 fcitx5 插件。
 - **V10 增强**：后台自动发现与心跳、断线提示与自动重连提示、错误透传、单像素悬浮窗保活（1×1 透明、不可交互，锁屏/后台保持进程存活以继续录音），以及一对多连接的会话锁（同一时刻仅一个客户端持有听写会话）。
 
 ## 已发布版本与资产
@@ -18,7 +17,6 @@ OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转�
 | Release | 内容 | 说明 |
 | --- | --- | --- |
 | [android-lan-v10](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-v10)（最新） | Android arm64-v8a APK + Linux aarch64/x86_64 remote-client | 局域网远程听写版；APK 为 release 签名构建 |
-| [v1.3.16-tauri](https://github.com/Yang-XianChen/OpenLess/releases/tag/v1.3.16-tauri) | `OpenLess_1.3.16_arm64.deb` | Linux arm64 安装包，含 fcitx5 插件，本地未签名构建 |
 | android-lan-v9 | 已从 Releases 删除 | 旧版局域网发布，请改用 V10 |
 
 ### android-lan-v10 包含的组件
@@ -72,7 +70,9 @@ npm ci
 npm run tauri dev
 ```
 
-Android APK 与 remote-client 的构建、签名和发布流程见 `.github/workflows/android-lan-release.yml` 以及各子项目 README。发布约定见 [RELEASING.md](RELEASING.md)。
+Android APK 与 remote-client 的构建、签名和发布流程见 `.github/workflows/android-lan-release.yml` 以及各子项目 README。
+
+> 桌面端源码保留备用；本仓库不再发布桌面安装包。
 
 ## 许可
 

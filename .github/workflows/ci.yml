@@ -1,6 +1,6 @@
 name: CI
 
-# 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
+# 多平台跨语言质量门禁。android-lan-release.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
 #   2. Rust 后端在 macOS / Windows / Linux 都能 cargo check 过（捕获 cfg 漏分支 / 平台 API 误用）
@@ -171,7 +171,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # vendor/qwen-asr 是 macOS 上 build.rs 必须的 git submodule。Windows
-          # checkout 也拉一份保持与 release-tauri.yml 一致，开销几秒可以忽略。
+          # checkout 也拉一份保持与 android-lan-release.yml 一致，开销几秒可以忽略。
           submodules: recursive
 
       - uses: actions/setup-node@v4
@@ -267,7 +267,7 @@ jobs:
             if [ "$v" != "$PKG" ]; then mismatch=1; fi
           done
           if [ "$mismatch" -ne 0 ]; then
-            echo "::error::版本号未对齐 — 请用 scripts/bump-version.sh 同步更新"
+            echo "::error::版本号未对齐 — 请手动同步 package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock"
             exit 1
           fi
           echo "[ok] 全部 5 处版本号一致：$PKG"

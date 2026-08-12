@@ -233,7 +233,7 @@ Desktop permissions live in `capabilities/default.json` with `"platforms": ["mac
 | `workflow_dispatch` | **release** if `ANDROID_KEYSTORE_*` secrets configured; else **debug (unsigned)** | Upload Actions artifacts; non-blocking fallback with job summary notice when unsigned |
 | Push tag `v*-tauri` / `v*-beta-tauri` | **release** (required secrets) | Signed release APKs + minisign `.sig` + `latest-android-{arch}[-beta].json` → attach to GitHub Release |
 
-`OPENLESS_RELEASE_CHANNEL` matches desktop `release-tauri.yml`: `-beta-tauri` → beta (prerelease manifests); otherwise stable.
+`OPENLESS_RELEASE_CHANNEL` 沿用 `-beta-tauri` → beta（预发布 manifest），否则 stable；桌面端发布流水线已移除，本仓库只发布 Android LAN 与 remote-client。
 
 Tag releases require secrets: `TAURI_SIGNING_PRIVATE_KEY` (minisign), `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` (APK signing).
 

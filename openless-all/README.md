@@ -129,24 +129,9 @@ npm run check:hotkey-injection
 - Text insertion through `Ctrl+V` is treated as copy fallback unless the app can
   confirm insertion.
 
-## Release Signing
+## 发布说明
 
-Tagged releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes.
-
-Required GitHub secrets:
-
-- `APPLE_CERTIFICATE`
-- `APPLE_CERTIFICATE_PASSWORD`
-- `APPLE_ID`
-- `APPLE_PASSWORD`
-- `APPLE_TEAM_ID`
-
-Optional:
-
-- `APPLE_PROVIDER_SHORT_NAME`
-- `KEYCHAIN_PASSWORD`
-
-Manual workflow runs can still produce ad-hoc signed test builds, but tagged macOS releases fail if signing/notarization secrets are missing.
+桌面端源码保留备用，但本仓库已停止桌面端发布。当前发布物只有 Android LAN APK 与 remote-client，发布流程见 `.github/workflows/android-lan-release.yml`。
 
 ## Ignored Local Output
 
