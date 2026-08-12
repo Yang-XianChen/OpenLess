@@ -5,12 +5,35 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 空闲保活使用 specialUse 前台服务类型（不触碰麦克风型后台启动限制）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application>
         <service
             android:name=".OpenLessOverlayService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="specialUse|microphone">
+            <!-- Android 14+ 对 specialUse 要求声明实际用途，否则可能被 Play 审核拒绝。 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="overlay_dictation_and_remote_backend_keepalive" />
+        </service>
+
+        <!-- 外部调度保活：开机/更新/周期 Alarm 拉起 LAN 后端。 -->
+        <receiver
+            android:name=".OpenLessKeepaliveReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.openless.app.keepalive.CHECK" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".OverlayPermissionActivity"

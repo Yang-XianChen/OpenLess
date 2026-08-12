@@ -45,6 +45,7 @@ const KOTLIN_FILES = [
   'OverlayPermissionActivity.kt',
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentWriter.kt',
+  'OpenLessKeepaliveReceiver.kt',
 ];
 
 const KOTLIN_TEST_FILES = [

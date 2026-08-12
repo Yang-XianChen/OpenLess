@@ -373,6 +373,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::open_android_notification_settings,
             $crate::commands::open_android_battery_settings,
             $crate::commands::run_android_keepalive_self_test,
+            $crate::commands::run_android_process_kill_self_test,
             $crate::commands::request_android_overlay_permission,
             $crate::commands::show_android_overlay,
             $crate::commands::hide_android_overlay,

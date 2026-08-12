@@ -37,32 +37,36 @@ function usePlatformCaps(): PlatformCapabilities | null {
 }
 
 // 通用：录音与输入 · 快捷键 · 主题 · 语言。
+// 移动端精简（用户拍板）：只保留录音与输入；选区润色 / 主题 / 语言是桌面向配置，
+// 在手机上隐藏。桌面快捷键本就有 supportsDesktopHotkey 门控。
 export function GeneralTab() {
   const platformCaps = usePlatformCaps();
   const showDesktopShortcuts = platformCaps?.supportsDesktopHotkey === true;
+  const isMobile = platformCaps?.platform === 'mobile' || platformCaps?.platform === 'android';
 
   return (
     <>
       <RecordingInputSection />
-      <SelectionPolishSection />
+      {!isMobile && <SelectionPolishSection />}
       {showDesktopShortcuts && <ShortcutsSection />}
-      <ThemeSection />
-      <LanguageSection />
+      {!isMobile && <ThemeSection />}
+      {!isMobile && <LanguageSection />}
     </>
   );
 }
 
 // 服务：AI 提供商 · 本地模型 · 扩展市场。
 // 本地模型是「语音识别由谁提供」的一种答案，和云端提供商属同一决策，
-// 不再藏进「高级」。
+// 不再藏进「高级」。移动端精简：网络设置（桌面向）隐藏，只留提供商 + 风格市场。
 export function ServicesTab() {
   const platformCaps = usePlatformCaps();
   const showLocalModel = platformCaps?.platform === 'desktop';
+  const isMobile = platformCaps?.platform === 'mobile' || platformCaps?.platform === 'android';
 
   return (
     <>
       <ProvidersSection />
-      <NetworkSection />
+      {!isMobile && <NetworkSection />}
       {showLocalModel && <LocalModelSection />}
       <MarketplaceSection />
     </>

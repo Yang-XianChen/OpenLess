@@ -1799,12 +1799,23 @@ pub(super) fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
 }
 
 pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
-    begin_session_as(inner, false).await
+    begin_session_as_flags(inner, false, false).await
 }
 
 /// begin_session 的带参版本，voice_agent=true 时在 Starting 阶段就标记好，
 /// 防止 finish_starting_session 处理 pending_stop 时丢失标志。
 pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> Result<(), String> {
+    begin_session_as_flags(inner, voice_agent, false).await
+}
+
+/// begin_session 的最小泛化版本：额外支持 remote_raw（局域网/桌面双模式「Raw」听写）。
+/// 两个标志都必须在 begin_session_state 之后、同一把锁内写入，才能保证跨 await 边界
+/// 时一次启动流程只服务会话开头的真值（不会把上一会话的标志带到下一会话）。
+pub(super) async fn begin_session_as_flags(
+    inner: &Arc<Inner>,
+    voice_agent: bool,
+    remote_raw: bool,
+) -> Result<(), String> {
     let current_session_id = {
         let mut state = inner.state.lock();
         let Some(session_id) =
@@ -1814,6 +1825,9 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
         };
         if voice_agent {
             state.voice_agent = true;
+        }
+        if remote_raw {
+            state.remote_raw = true;
         }
         if let Some(label) = state.front_app.as_deref() {
             log::info!("[coord] front_app captured: {label}");
@@ -3951,17 +3965,30 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
 
+    let remote_raw = inner.state.lock().remote_raw;
     let prefs = inner.prefs.get();
-    let pack = match inner
-        .style_packs
-        .get_or_default_active(&prefs.active_style_pack_id)
-    {
-        Ok(pack) => pack,
-        Err(error) => {
-            log::warn!(
-                "[coord] active style pack unavailable, falling back to builtin light: {error}"
-            );
-            crate::types::builtin_style_pack_for_mode(PolishMode::Light)
+    let pack = if remote_raw {
+        // 远程「Raw」模式：绕过 active style pack，强制内置 Raw 风格包。base_mode=Raw
+        // 且 prompt 为默认值时 polish_or_passthrough 走直通分支，不进 LLM——这正是
+        // 双模式热键中 RAlt=原文、RAlt+RCtrl=润色 的差别所在。
+        let pack = crate::types::builtin_style_pack_for_mode(PolishMode::Raw);
+        log::info!(
+            "[style-pack] remote raw mode forced builtin raw pack (session_id={})",
+            current_session_id
+        );
+        pack
+    } else {
+        match inner
+            .style_packs
+            .get_or_default_active(&prefs.active_style_pack_id)
+        {
+            Ok(pack) => pack,
+            Err(error) => {
+                log::warn!(
+                    "[coord] active style pack unavailable, falling back to builtin light: {error}"
+                );
+                crate::types::builtin_style_pack_for_mode(PolishMode::Light)
+            }
         }
     };
     let mode = pack.base_mode;

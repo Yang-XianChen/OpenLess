@@ -63,7 +63,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         super.onCreate()
         instance = this
         OpenLessOverlayBridge.listener = this
+        // 诊断：每次服务实例创建都记方案内可审计的时间戳与重启计数（持久化，进程死亡后仍可读）。
+        recordServiceStart()
         startKeepaliveWatchdog()
+        // 外部调度兜底：开机/更新/周期闹钟不依赖进程存活，尽量常驻调度。
+        OpenLessKeepaliveReceiver.scheduleNext(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -86,8 +90,14 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 beginDictationFromOverlay()
             }
             ACTION_LAN_START_RECORDING -> {
-                // 局域网远程听写：只把服务提升为前台麦克风服务，让锁屏/后台也能录音。
-                if (!tryPromoteForeground("远程听写中")) {
+                // 局域网远程听写：录音会话必须提升为「麦克风」型前台服务，让锁屏/后台也能录音
+                // （同时满足麦克风权限要求）。
+                if (!tryPromoteForeground(
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                        "远程听写中",
+                        checkMic = true,
+                    )
+                ) {
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
@@ -124,11 +134,25 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             ACTION_TOGGLE_EXPAND -> handleIconClick()
             ACTION_KEYBOARD_CHANGED -> handleKeyboardChanged(intent)
             ACTION_REFRESH_LAYOUT -> refreshOverlayLayout()
+            OpenLessKeepaliveReceiver.ACTION_KEEPALIVE_CHECK -> {
+                // 外部调度触发：直接恢复后端（进程可能刚被系统重建），并续期下一次闹钟。
+                runCatching { OpenLessNative.nativeEnsureRemoteBackend(this) }
+                OpenLessKeepaliveReceiver.scheduleNext(this)
+            }
         }
         // 保活开关开启时，服务被拉起/重启后自动补挂单像素悬浮窗。
         if (OpenLessAndroidPreferences.singlePixelKeepalive(this)) {
             showSinglePixelOverlay()
         }
+        // 保活开启时维持周期调度（重启/开机后再拉起兜底闹钟链）。
+        if (
+            OpenLessAndroidPreferences.notificationKeepalive(this) ||
+            OpenLessAndroidPreferences.singlePixelKeepalive(this)
+        ) {
+            OpenLessKeepaliveReceiver.scheduleNext(this)
+        }
+        // 进程级自测恢复校验：下次服务/进程重建后验证「LAN 服务真的回来了」。
+        checkSelfTestRecovery()
         // 通知保活开启时，无论以什么动作拉起服务，都确保前台服务与常驻通知存在。
         if (
             OpenLessAndroidPreferences.notificationKeepalive(this) &&
@@ -144,6 +168,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     override fun onDestroy() {
         keepaliveWatchdog.shutdownNow()
         foregroundActive = false
+        recordProcessDeath()
         if (OpenLessOverlayBridge.listener === this) {
             OpenLessOverlayBridge.listener = null
         }
@@ -155,6 +180,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         // 系统杀死前台服务时也会走到这里：同步原生 OVERLAY_VISIBLE=false，避免状态永久残留为 true。
         runCatching { OpenLessNative.nativeNotifyOverlayDestroyed() }
         super.onDestroy()
+    }
+
+    /** 用户在最近任务里划掉应用：进程可能随后被杀，先落下诊断时间戳。 */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        recordProcessDeath()
+        Log.i(TAG, "task removed — process death epoch recorded")
     }
 
     override fun onCapsuleStateChanged(state: String, message: String?) {
@@ -818,37 +850,67 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun tryPromoteRecordingForeground(): Boolean {
-        return tryPromoteForeground("录音中")
+        return tryPromoteForeground(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            "录音中",
+            checkMic = true,
+        )
+    }
+
+    /**
+     * 空闲/待命保活：用 specialUse 前台服务类型，不触碰麦克风型后台启动限制
+     * （Android 14+ 对后台启动/维持麦克风型前台服务有限制）。
+     */
+    private fun tryPromoteKeepaliveForeground(): Boolean {
+        return tryPromoteForeground(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            "远程听写待命",
+            checkMic = false,
+            showPermissionToast = false,
+        )
     }
 
     private fun tryPromoteForeground(
+        type: Int,
         notificationText: String,
+        checkMic: Boolean,
         showPermissionToast: Boolean = true,
     ): Boolean {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (checkMic && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             if (showPermissionToast) {
                 showToast("请先授予麦克风权限")
             }
             return false
         }
         val notification = buildNotification(notificationText)
+        // specialUse 前台服务类型是 API 34+ 概念；更早系统用 0（无类型）避免 SecurityException。
+        val effectiveType = if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            type == ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        ) {
+            0
+        } else {
+            type
+        }
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-                )
+                startForeground(NOTIFICATION_ID, notification, effectiveType)
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
             foregroundActive = true
             true
         } catch (error: SecurityException) {
-            Log.w(TAG, "microphone foreground service not allowed from current state", error)
+            Log.w(TAG, "foreground service type=$type not allowed from current state", error)
             foregroundActive = false
             if (showPermissionToast) {
-                showToast("系统限制后台录音，请在 OpenLess 内开始")
+                showToast(
+                    if (checkMic) {
+                        "系统限制后台录音，请在 OpenLess 内开始"
+                    } else {
+                        "系统限制后台服务，请在系统设置中允许本应用"
+                    },
+                )
             }
             false
         }
@@ -887,6 +949,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         keepaliveWatchdogStarted = true
         keepaliveWatchdog.scheduleWithFixedDelay({
             try {
+                checkSelfTestRecovery()
                 val backendOk = OpenLessNative.nativeEnsureRemoteBackend(this)
                 var foregroundOk = true
                 if (backendOk && OpenLessAndroidPreferences.notificationKeepalive(this)) {
@@ -897,7 +960,26 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 Log.w(TAG, "keepalive watchdog failed", error)
                 updateKeepaliveNotification(false)
             }
-        }, 0L, 5L, TimeUnit.SECONDS)
+        }, 0L, KEEPALIVE_WATCHDOG_INTERVAL_SECONDS, TimeUnit.SECONDS)
+    }
+
+    /**
+     * 进程级自测恢复校验：自杀式重启（killProcess）后，新进程会挂上 KEY_SELF_TEST_EXPECTED，
+     * 这里在 LAN 后端恢复后落结果、清除期望标记，UI 就能展示「进程被杀了还能自己回来」。
+     */
+    private fun checkSelfTestRecovery() {
+        val diag = getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
+        if (!diag.getBoolean(KEY_SELF_TEST_EXPECTED, false)) {
+            return
+        }
+        val recovered = runCatching { OpenLessNative.nativeIsLanServerRunning() }
+            .getOrDefault(false)
+        diag.edit()
+            .putBoolean(KEY_SELF_TEST_RECOVERED, recovered)
+            .putBoolean(KEY_SELF_TEST_EXPECTED, false)
+            .putLong(KEY_SELF_TEST_RECOVERED_AT, System.currentTimeMillis())
+            .apply()
+        Log.i(TAG, "keepalive process-kill self-test recovered=$recovered")
     }
 
     private fun ensureKeepaliveForeground(): Boolean {
@@ -908,7 +990,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             updateKeepaliveNotification(true)
             return true
         }
-        return tryPromoteForeground("远程听写待命", showPermissionToast = false)
+        return tryPromoteKeepaliveForeground()
     }
 
     private fun updateKeepaliveNotification(ok: Boolean) {
@@ -926,13 +1008,19 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             lastKeepaliveFailure = reason
             "远程听写服务异常：$reason；请打开 OpenLess 查看解决方案"
         }
+        val keepaliveType =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                0
+            }
         if (foregroundActive) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
                         NOTIFICATION_ID,
                         buildNotification(text),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                        keepaliveType,
                     )
                 } else {
                     startForeground(NOTIFICATION_ID, buildNotification(text))
@@ -957,6 +1045,27 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             setColor(color)
             setStroke(strokeWidth, strokeColor)
         }
+    }
+
+    /** 服务实例创建：记录启动时刻并递增重启计数（跨进程持久化）。 */
+    private fun recordServiceStart() {
+        val prefs = getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
+        val next = prefs.getInt(KEY_RESTART_COUNT, 0) + 1
+        prefs.edit()
+            .putString(KEY_LAST_SERVICE_START_AT, formatDiagTime(System.currentTimeMillis()))
+            .putInt(KEY_RESTART_COUNT, next)
+            .apply()
+        Log.i(TAG, "keepalive diagnostics: service start epoch #$next")
+    }
+
+    /** 服务/进程被销毁：记录死亡时刻（onDestroy / onTaskRemoved）。 */
+    private fun recordProcessDeath() {
+        val now = System.currentTimeMillis()
+        getSharedPreferences(DIAG_PREFS, MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAST_PROCESS_DEATH_AT, formatDiagTime(now))
+            .apply()
+        Log.i(TAG, "keepalive diagnostics: process death epoch recorded")
     }
 
     private fun overlaySize(): Int {
@@ -1059,6 +1168,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val EXTRA_KEYBOARD_VISIBLE = "keyboard_visible"
         const val EXTRA_KEYBOARD_TOP = "keyboard_top"
         const val EXTRA_KEYBOARD_BOTTOM = "keyboard_bottom"
+        // Kotlin watchdog 检查周期（与 Rust 端 10s 对齐，降低唤醒频率省电）。
+        private const val KEEPALIVE_WATCHDOG_INTERVAL_SECONDS = 10L
         private const val DEFAULT_ICON_SIZE_DP = 72
         private const val MIN_ICON_IMAGE_SIZE_DP = 32
         private const val ICON_PADDING_DP = 12
@@ -1070,6 +1181,26 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         private const val PREF_KEY_Y = "overlay_y"
         private const val NOTIFICATION_ID = 42001
         private const val TAG = "OpenLessOverlayService"
+        // 进程存活诊断（持久化，进程被系统杀掉后仍能被 UI 读到真实时间戳）。
+        private const val DIAG_PREFS = "openless_keepalive_diag"
+        private const val KEY_LAST_SERVICE_START_AT = "lastServiceStartAt"
+        private const val KEY_LAST_PROCESS_DEATH_AT = "lastProcessDeathAt"
+        private const val KEY_RESTART_COUNT = "restartCount"
+        // 进程级自测标记：自杀式重启后由恢复校验消费。
+        private const val KEY_SELF_TEST_EXPECTED = "selfTestExpected"
+        private const val KEY_SELF_TEST_RECOVERED = "selfTestRecovered"
+        private const val KEY_SELF_TEST_RECOVERED_AT = "selfTestRecoveredAt"
+        private val DIAG_TIME_FORMAT =
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZZZZ", java.util.Locale.US)
+
+        private fun formatDiagTime(millis: Long): String {
+            return try {
+                DIAG_TIME_FORMAT.format(java.util.Date(millis))
+            } catch (error: Throwable) {
+                Log.w(TAG, "format diag time failed", error)
+                millis.toString()
+            }
+        }
 
         private val overlayLock = Any()
         private val overlayRoots = mutableListOf<FrameLayout>()
@@ -1098,7 +1229,38 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             status.put("lastCheckAt", OpenLessNative.nativeGetKeepaliveLastCheckAt())
             status.put("lastStatus", OpenLessNative.nativeGetKeepaliveLastStatus())
             status.put("autoRecoverySupported", true)
+            // 进程存活诊断：真实时间戳，进程被杀后仍能反映「上次启动/死亡」。
+            val diag = context.getSharedPreferences(DIAG_PREFS, Context.MODE_PRIVATE)
+            status.put("lastServiceStartAt", diag.getString(KEY_LAST_SERVICE_START_AT, null))
+            status.put("lastProcessDeathAt", diag.getString(KEY_LAST_PROCESS_DEATH_AT, null))
+            status.put("restartCount", diag.getInt(KEY_RESTART_COUNT, 0))
+            status.put("selfTestRecovered", diag.getBoolean(KEY_SELF_TEST_RECOVERED, false))
+            status.put(
+                "selfTestRecoveredAt",
+                diag.getLong(KEY_SELF_TEST_RECOVERED_AT, 0L).takeIf { it > 0L }
+                    ?.let { formatDiagTime(it) },
+            )
             return status.toString()
+        }
+
+        /**
+         * 进程级保活自测（自杀式重启）：标记期望恢复 → 兜底闹钟 → 杀死本进程。
+         * 进程被杀后由 START_STICKY / 外部闹钟重新拉起服务，恢复校验见
+         * [checkSelfTestRecovery]。注意：本方法不返回（进程已死）。
+         */
+        @JvmStatic
+        fun runProcessKillSelfTest(context: Context) {
+            runCatching { OpenLessNative.nativeEnsureRemoteBackend(context) }
+            val diag = context.getSharedPreferences(DIAG_PREFS, Context.MODE_PRIVATE)
+            diag.edit()
+                .putBoolean(KEY_SELF_TEST_EXPECTED, true)
+                .putBoolean(KEY_SELF_TEST_RECOVERED, false)
+                .putLong(KEY_SELF_TEST_RECOVERED_AT, 0L)
+                .apply()
+            // 兜底：即便 START_STICKY 不生效，1 秒后的外部闹钟也会拉起进程做恢复校验。
+            OpenLessKeepaliveReceiver.scheduleImmediateCheck(context)
+            android.util.Log.i(TAG, "process-kill self-test: killing process")
+            android.os.Process.killProcess(android.os.Process.myPid())
         }
 
         private fun isBatteryOptimizationRestricted(context: Context): Boolean {

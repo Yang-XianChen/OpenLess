@@ -18,6 +18,13 @@ class OpenLessApplication : Application() {
         OpenLessAppContext.initialize(this)
         if (isMainProcess()) {
             OpenLessShizukuBridge.initialize()
+            // 应用任何一次前台启动都维持保活闹钟链，避免「从未经过 service/boot」时空转。
+            if (
+                OpenLessAndroidPreferences.notificationKeepalive(this) ||
+                OpenLessAndroidPreferences.singlePixelKeepalive(this)
+            ) {
+                OpenLessKeepaliveReceiver.scheduleNext(this)
+            }
         }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit

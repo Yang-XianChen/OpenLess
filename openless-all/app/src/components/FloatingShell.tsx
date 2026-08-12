@@ -34,13 +34,11 @@ import {
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
 import { type SettingsSectionId } from './SettingsModal';
-import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileStyleSheet } from './MobileStyleSheet';
 import { subItemLabelKey } from '../lib/navLabels';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { useAppState, type AppTab } from '../state/useAppState';
 
-const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk'];
 const STYLE_TAB_IDS: AppTab[] = ['style', 'marketplace'];
 
 /** macOS 上侧栏顶部需让开原生红绿灯的高度（红绿灯竖直落在 ~6–22px）。 */
@@ -96,7 +94,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
 
   // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
@@ -177,7 +174,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const openSettings = (section?: SettingsSectionId) => {
     setSettingsInitialSection(section);
     setSettingsOpen(true);
-    setMoreOpen(false);
     setStyleOpen(false);
   };
 
@@ -207,7 +203,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const mobileTitle = settingsOpen
     ? t('shell.footer.settings')
     : t(subItemLabelKey(currentTab));
-  const moreTabActive = MORE_TAB_IDS.includes(currentTab);
   const styleTabActive = STYLE_TAB_IDS.includes(currentTab);
 
   return (
@@ -464,24 +459,17 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         <>
           <MobileBottomNav
             currentTab={currentTab}
-            moreOpen={moreOpen}
-            moreTabActive={moreTabActive}
             styleOpen={styleOpen}
             styleTabActive={styleTabActive}
             settingsOpen={settingsOpen}
             onSelectTab={id => {
-              setMoreOpen(false);
               setStyleOpen(false);
               setCurrentTab(id);
             }}
             onOpenStyle={() => {
-              setMoreOpen(false);
               setStyleOpen(true);
             }}
-            onOpenMore={() => {
-              setStyleOpen(false);
-              setMoreOpen(true);
-            }}
+            onOpenSettings={() => openSettings()}
           />
           <MobileStyleSheet
             open={styleOpen}
@@ -491,13 +479,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               setStyleOpen(false);
               setCurrentTab(id);
             }}
-          />
-          <MobileMoreSheet
-            open={moreOpen}
-            currentTab={currentTab}
-            onClose={() => setMoreOpen(false)}
-            onSelectTab={setCurrentTab}
-            onOpenSettings={() => openSettings()}
           />
         </>
       )}
@@ -661,27 +642,22 @@ function MobileTopBar({
 
 function MobileBottomNav({
   currentTab,
-  moreOpen,
-  moreTabActive,
   styleOpen,
   styleTabActive,
   settingsOpen,
   onSelectTab,
   onOpenStyle,
-  onOpenMore,
+  onOpenSettings,
 }: {
   currentTab: AppTab;
-  moreOpen: boolean;
-  moreTabActive: boolean;
   styleOpen: boolean;
   styleTabActive: boolean;
   settingsOpen: boolean;
   onSelectTab: (tab: AppTab) => void;
   onOpenStyle: () => void;
-  onOpenMore: () => void;
+  onOpenSettings: () => void;
 }) {
   const { t } = useTranslation();
-  const moreActive = moreOpen || moreTabActive;
   const styleActive = !settingsOpen && (styleOpen || styleTabActive);
 
   return (
@@ -727,12 +703,12 @@ function MobileBottomNav({
       </button>
       <button
         type="button"
-        onClick={onOpenMore}
-        className={moreActive ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
+        onClick={onOpenSettings}
+        className={settingsOpen ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
         style={mobileNavBtnStyle}
       >
-        <Icon name="more" size={18} />
-        <span style={{ fontSize: 10.5, fontWeight: moreActive ? 600 : 500 }}>{t('nav.more')}</span>
+        <Icon name="settings" size={18} />
+        <span style={{ fontSize: 10.5, fontWeight: settingsOpen ? 600 : 500 }}>{t('shell.footer.settings')}</span>
       </button>
     </nav>
   );

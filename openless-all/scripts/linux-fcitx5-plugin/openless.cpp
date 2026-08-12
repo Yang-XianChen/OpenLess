@@ -168,12 +168,24 @@ public:
                         keyEvent.filterAndAccept();
                         return;
                     }
-                    if (isPress && dictationTriggerHeld_ && !isModifierKeySym(sym) &&
-                        !dictationTriggerCombined_) {
-                        FCITX_LOGC(openless, Debug)
-                            << "Dictation hotkey combined with sym=" << sym;
-                        dictationTriggerCombined_ = true;
-                        dictationKeyCombined(sym, states, true);
+                    if (isPress && dictationTriggerHeld_ && !dictationTriggerCombined_) {
+                        // RAlt 按住时按下 RCtrl → 「转录 + 清洗」组合键（sym=0xffe4, Control_R）。
+                        // 单独识别修饰键组合：RCtrl 落在 isModifierKeySym 范围内，必须显式命中
+                        // 才会触发，其它组合（包括修饰键）一律忽略。
+                        if (sym == 0xffe4) {
+                            FCITX_LOGC(openless, Debug)
+                                << "Dictation hotkey combined with RCtrl";
+                            dictationTriggerCombined_ = true;
+                            dictationKeyCombined(sym, states, true);
+                            keyEvent.filterAndAccept();
+                            return;
+                        }
+                        if (!isModifierKeySym(sym)) {
+                            FCITX_LOGC(openless, Debug)
+                                << "Dictation hotkey combined with sym=" << sym;
+                            dictationTriggerCombined_ = true;
+                            dictationKeyCombined(sym, states, true);
+                        }
                     }
                     if (qaRawSym_ != 0 && sym == qaRawSym_ &&
                         states == qaRawStates_) {

@@ -78,8 +78,10 @@ enum SessionEvent {
 enum HotkeyEvent {
     Press,
     Release,
-    /// 右 Alt 按住期间又按了其它键（例如 Alt+Left/Right 前进后退）。
-    Combined,
+    /// 右 Alt 按住期间又按了其它键。携带组合键 keysym：
+    /// - 0xffe4（RCtrl）→ 转录 + 清洗；
+    /// - 其它（例如 Alt+Left/Right 前进后退）→ 不触发听写。
+    Combined(u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -157,6 +159,7 @@ const DBUS_DEST: &str = "org.fcitx.Fcitx5";
 const DBUS_PATH: &str = "/openless";
 const DBUS_IFACE: &str = "org.fcitx.Fcitx.OpenLess1";
 const KEYSYM_ALT_R: u32 = 0xffea;
+const KEYSYM_CTRL_R: u32 = 0xffe4;
 
 /// Wayland 方案：通过 fcitx5 OpenLess 插件监听右 Alt 键事件，
 /// 并在输入法提示区显示录音/转录/失败状态。
@@ -195,7 +198,7 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
                 HotkeyEvent::Release
             });
         } else if member == "DictationKeyCombined" {
-            let _ = tx.send(HotkeyEvent::Combined);
+            let _ = tx.send(HotkeyEvent::Combined(args.0));
         }
         true
     }) {
@@ -233,6 +236,7 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
     let mut session_address: Option<String> = None;
     let mut alt_down = false;
     let mut alt_combined = false;
+    let mut alt_combined_sym: Option<u32> = None;
     loop {
         let _ = conn.process(Duration::from_millis(200));
         while let Ok(event) = event_rx.try_recv() {
@@ -243,6 +247,7 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
                 HotkeyEvent::Press => {
                     alt_down = true;
                     alt_combined = false;
+                    alt_combined_sym = None;
                     // 非切换模式：录音中再次按下右 Alt 立即停止。
                     if !toggle && state == ClientState::Recording {
                         state = ClientState::Stopping;
@@ -251,22 +256,29 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
                         }
                     }
                 }
-                HotkeyEvent::Combined => {
-                    // Alt+其它键（如左右方向键）是系统快捷键，不触发听写。
+                HotkeyEvent::Combined(sym) => {
+                    // 记录组合键 keysym：RCtrl 走「转录+清洗」，其它（如 Alt+方向键）
+                    // 是系统快捷键，松手时忽略。
                     alt_combined = true;
+                    alt_combined_sym = Some(sym);
                 }
                 HotkeyEvent::Release => {
                     let clean_tap = alt_down && !alt_combined;
+                    let clean_start = alt_down && alt_combined_sym == Some(KEYSYM_CTRL_R);
                     alt_down = false;
-                    if !clean_tap {
+                    alt_combined = false;
+                    alt_combined_sym = None;
+                    if !clean_tap && !clean_start {
                         continue;
                     }
+                    let mode = if clean_start { "clean" } else { "raw" };
                     if state == ClientState::Idle {
                         match start_flow(
                             address.as_deref(),
                             auto_discover,
                             event_tx.clone(),
                             &client_id,
+                            mode,
                         ) {
                             Ok(found) => {
                                 session_address = Some(found);
@@ -274,7 +286,7 @@ fn run_fcitx(address: Option<String>, auto_discover: bool, toggle: bool, client_
                             }
                             Err(error) => eprintln!("[remote] start failed: {error}"),
                         }
-                    } else if toggle && state == ClientState::Recording {
+                    } else if clean_tap && toggle && state == ClientState::Recording {
                         state = ClientState::Stopping;
                         if let Some(address) = session_address.take() {
                             stop_flow(&address);
@@ -364,6 +376,7 @@ fn start_flow(
     auto_discover: bool,
     event_tx: mpsc::Sender<SessionEvent>,
     client_id: &str,
+    mode: &str,
 ) -> Result<String, String> {
     let resolved = match resolve_address(address, auto_discover) {
         Ok(resolved) => resolved,
@@ -377,7 +390,7 @@ fn start_flow(
     let mut last_error = "未连接".to_string();
     for attempt in 0..2 {
         println!("[remote] connecting {resolved} (attempt {})", attempt + 1);
-        match start_session(&resolved, client_id) {
+        match start_session(&resolved, client_id, mode) {
             Ok((socket, session_id)) => {
                 if let Some(cache) = DISCOVERED.get() {
                     *cache.lock().unwrap() = Some(resolved.clone());
@@ -636,7 +649,11 @@ fn interface_up(_name: &str) -> bool {
 
 /// 连接手机并完成 `hello` 握手 + `start`。返回会话 socket 与服务端生成的
 /// `sessionId`（老服务端没有该字段时为 `None`，客户端进入兼容模式）。
-fn start_session(address: &str, client_id: &str) -> Result<(ClientSocket, Option<String>), String> {
+fn start_session(
+    address: &str,
+    client_id: &str,
+    mode: &str,
+) -> Result<(ClientSocket, Option<String>), String> {
     let url = format!("ws://{address}");
     let socket_addr = address
         .parse::<SocketAddr>()
@@ -693,6 +710,7 @@ fn start_session(address: &str, client_id: &str) -> Result<(ClientSocket, Option
             "type": "start",
             "clientId": client_id,
             "translation": false,
+            "mode": mode,
             "protocolVersion": PROTOCOL_VERSION
         }),
     )?;

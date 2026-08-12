@@ -23,6 +23,13 @@ export interface AndroidKeepaliveStatus {
   lastCheckAt?: string | null;
   lastStatus?: string | null;
   autoRecoverySupported: boolean;
+  /** 持久化的进程诊断：上次前台服务启动时刻 / 上次进程死亡时刻 / 重启计数。 */
+  lastServiceStartAt?: string | null;
+  lastProcessDeathAt?: string | null;
+  restartCount?: number;
+  /** 进程级自测结果：自杀式重启后 LAN 服务是否真的恢复。 */
+  selfTestRecovered?: boolean;
+  selfTestRecoveredAt?: string | null;
 }
 
 export interface AndroidAccessibilityStatus {

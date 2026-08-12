@@ -48,6 +48,9 @@ pub(crate) struct SessionState {
     /// 用户开始 dictation 时所处的前台 app 标签（"Mail (com.apple.mail)" / Windows 窗口标题）。
     /// 用作 LLM polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
     pub(crate) front_app: Option<String>,
+    /// 局域网远程听写「Raw」模式：收尾分派时强制用内置 Raw 风格包（base_mode=Raw），
+    /// 跳过 LLM 润色，返回 ASR 原文。桌面双模式热键经 start_dictation_raw 置位。
+    pub(crate) remote_raw: bool,
     /// Less Computer 语音模式：专用 Agent 键按下后置 true。end_session 在拿到转写后
     /// 据此分流——不走润色插入，转而把转写交给 Claude 跑任务、结果弹胶囊。默认 false。
     pub(crate) voice_agent: bool,
@@ -63,6 +66,7 @@ impl Default for SessionState {
             focus_target: None,
             session_id: initial_session_id(),
             front_app: None,
+            remote_raw: false,
             voice_agent: false,
         }
     }
@@ -86,6 +90,8 @@ pub(crate) fn begin_session_state(
     state.front_app = front_app;
     // 每个新会话默认是普通听写；Less Computer 专用入口会显式把它标为语音 Agent。
     state.voice_agent = false;
+    // 远程 Raw 同样只属于单个会话：新会话从非 Raw 开始，需要时由入口置位。
+    state.remote_raw = false;
     Some(state.session_id)
 }
 
@@ -285,6 +291,18 @@ mod tests {
         };
         begin_session_state(&mut state, None, None).unwrap();
         assert!(!state.voice_agent, "新会话必须从普通听写开始");
+    }
+
+    #[test]
+    fn begin_session_resets_remote_raw_flag() {
+        // 与 voice_agent 同理：上一会话残留的 remote_raw=true 不能让后续普通听写
+        // 误跳过 LLM 润色（否则所有听写都会变 Raw 原文）。
+        let mut state = SessionState {
+            remote_raw: true,
+            ..Default::default()
+        };
+        begin_session_state(&mut state, None, None).unwrap();
+        assert!(!state.remote_raw, "新会话必须从非 Raw 开始");
     }
 
     #[test]

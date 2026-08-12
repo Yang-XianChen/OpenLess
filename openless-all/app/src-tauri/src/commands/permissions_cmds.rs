@@ -39,6 +39,12 @@ pub fn run_android_keepalive_self_test() -> Result<serde_json::Value, String> {
     crate::mobile_runtime::run_android_keepalive_self_test()
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn run_android_process_kill_self_test() -> Result<serde_json::Value, String> {
+    crate::android::run_android_process_kill_self_test()
+}
+
 #[tauri::command]
 pub fn request_android_overlay_permission() -> crate::android::AndroidOverlayPermissionResult {
     crate::android::request_android_overlay_permission()

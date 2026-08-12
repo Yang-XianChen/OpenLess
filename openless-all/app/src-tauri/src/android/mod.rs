@@ -79,6 +79,9 @@ pub fn get_android_keepalive_status() -> serde_json::Value {
                 "lastError": error,
                 "lastCheckAt": crate::mobile_runtime::keepalive_last_check_at(),
                 "lastStatus": crate::mobile_runtime::keepalive_last_status(),
+                "lastServiceStartAt": null,
+                "lastProcessDeathAt": null,
+                "restartCount": 0,
                 "autoRecoverySupported": true,
             })
         })
@@ -96,6 +99,9 @@ pub fn get_android_keepalive_status() -> serde_json::Value {
             "lastError": null,
             "lastCheckAt": null,
             "lastStatus": null,
+            "lastServiceStartAt": null,
+            "lastProcessDeathAt": null,
+            "restartCount": 0,
             "autoRecoverySupported": false,
         })
     }
@@ -135,4 +141,11 @@ pub fn open_android_notification_settings() -> Result<(), String> {
 
 pub fn open_android_battery_settings() -> Result<(), String> {
     call_android_settings_method("openBatteryOptimizationSettings")
+}
+
+/// 进程级保活自测：Kotlin 侧标记期望恢复并 kill 本进程（自杀式重启）。
+/// 注意：调用通常是「最后一条命令」——进程随即被杀，返回只在拉活失败/未执行时可见。
+pub fn run_android_process_kill_self_test() -> Result<serde_json::Value, String> {
+    call_android_settings_method("runProcessKillSelfTest")?;
+    Ok(serde_json::json!({ "killed": true }))
 }

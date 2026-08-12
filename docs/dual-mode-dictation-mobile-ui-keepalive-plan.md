@@ -1,6 +1,6 @@
 # 双模式听写 + 移动端界面精简 + 保活稳定性方案
 
-> 状态：**计划阶段，等待 coding 许可**
+> 状态：**实施中（coding 许可已授予）**
 > 更新日期：2026-08-13
 > 涉及范围：`openless-all/remote-client`、`openless-all/scripts/linux-fcitx5-plugin`、`openless-all/app/src-tauri/src/android/lan_server.rs`、`openless-all/app/src-tauri/src/coordinator`、`openless-all/app/android`、`openless-all/app/android/frontend`
 
@@ -216,9 +216,26 @@ Rust watchdog（10s 检查 LAN server）      Kotlin service watchdog（5s 调 n
 - [x] 移动端保留：概览、历史、润色模式、风格市场、设置、悬浮窗原逻辑、权限引导界面。
 - [x] 移动端不保留：词汇、翻译、划词追问。
 
+编码进度：
+
+- [x] 2.3.1 fcitx5 插件识别 RAlt+RCtrl（openless.cpp，arm64 已重编）。
+- [x] 2.3.2 remote-client 双模式热键 + start.mode（raw/clean）。
+- [x] 2.3.3 LAN 协议 start.mode 字段（向后兼容）。
+- [x] 2.3.4 Coordinator start_dictation_raw / 会话级 remote_raw / Raw 内置包分派。
+- [x] 3.2 移动端底导精简：移除 MoreSheet，底导=概览/历史/风格/设置。
+- [x] 3.3 设置裁剪（移动端隐藏桌面项：选区润色/主题/语言/网络）。
+- [x] 4.2.1 空闲 specialUse 前台服务（仅录音期 electrode 麦克风型）。
+- [x] 4.2.2 AlarmManager 10 分钟外部调度 + BOOT_COMPLETED / MY_PACKAGE_REPLACED。
+- [x] 4.2.3 Kotlin 看门狗 10s / 持久化诊断（lastServiceStartAt、lastProcessDeathAt、restartCount）/ 进程级自测按钮。
+
+待验证（需 Android/真机构建）：
+
+- [ ] x86_64 libopenless.so 重编（本机缺 amd64 fcitx5 dev 包）。
+- [ ] 真机闲置 12h 后电脑端仍能连接 LAN 服务。
+- [ ] 手动杀进程后 ≤1 分钟内服务自动恢复并监听 45678。
+- [ ] 进程级自测按钮实际执行与恢复展示。
+- [ ] 获得 coding 许可后开始实施（已授予）。
+
 待确认：
 
-- [ ] 移动端设置裁剪的具体范围（3.3 的方向是否照此实施）。
-- [ ] 保活方案是否采用 `specialUse` + AlarmManager/WorkManager。
 - [ ] 首页是否改为远程听写状态页（默认保持现状）。
-- [ ] 获得 coding 许可后开始实施。

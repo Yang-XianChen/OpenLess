@@ -27,6 +27,9 @@ export function getAndroidKeepaliveStatus(): Promise<AndroidKeepaliveStatus> {
     lastError: null,
     lastCheckAt: null,
     lastStatus: null,
+    lastServiceStartAt: null,
+    lastProcessDeathAt: null,
+    restartCount: 0,
     autoRecoverySupported: false,
   }));
 }
@@ -50,6 +53,13 @@ export function runAndroidKeepaliveSelfTest(): Promise<{
   return invokeOrMock('run_android_keepalive_self_test', undefined, () => ({
     simulatedFailure: true,
     autoRecovered: true,
+  }));
+}
+
+/** 进程级保活自测：杀掉本进程让系统重建并验证 LAN 服务恢复。调用后当前窗口会消失。 */
+export function runAndroidProcessKillSelfTest(): Promise<{ killed: boolean }> {
+  return invokeOrMock('run_android_process_kill_self_test', undefined, () => ({
+    killed: true,
   }));
 }
 

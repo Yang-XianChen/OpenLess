@@ -11,6 +11,8 @@ const PERMISSIONS = [
   'android.permission.SYSTEM_ALERT_WINDOW',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+  'android.permission.RECEIVE_BOOT_COMPLETED',
   'android.permission.POST_NOTIFICATIONS',
 ];
 
@@ -20,10 +22,15 @@ const APPLICATION_SNIPPET = `
 `;
 
 const SERVICE_SNIPPETS = [
+  // 空闲/待命保活用 specialUse 型前台服务，仅录音会话期间提升为「麦克风」型。
   `<service
             android:name=".OpenLessOverlayService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />`,
+            android:foregroundServiceType="specialUse|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="overlay_dictation_and_remote_backend_keepalive" />
+        </service>`,
   `<service
             android:name=".OpenLessAccessibilityService"
             android:process=":accessibility"
@@ -40,6 +47,20 @@ const SERVICE_SNIPPETS = [
             android:name=".OpenLessAccessibilityCommandReceiver"
             android:process=":accessibility"
             android:exported="false" />`,
+  // 外部调度保活：开机 / 应用更新 / 周期 Alarm 拉起 LAN 后端。
+  `<receiver
+            android:name=".OpenLessKeepaliveReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.openless.app.keepalive.CHECK" />
+            </intent-filter>
+        </receiver>`,
   `<activity
             android:name=".OverlayPermissionActivity"
             android:exported="false"

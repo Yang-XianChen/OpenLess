@@ -18,12 +18,17 @@
 //!
 //! 客户端 → 服务端：
 //! - `{"type":"hello","clientId":"...","protocolVersion":2}`
-//! - `{"type":"start","clientId":"...","translation":false}`
+//! - `{"type":"start","clientId":"...","translation":false,"mode":"raw|clean"}`
 //! - `{"type":"ping","clientId":"...","sessionId":"..."}`
 //! - `{"type":"stop","clientId":"...","sessionId":"...","translation":false}`
 //! - `{"type":"cancel","clientId":"...","sessionId":"..."}`
 //! - `{"type":"status","clientId":"..."}`
 //! - `{"type":"ack","clientId":"...","resultId":"..."}`
+//!
+//! `start` 的可选字段 `mode`：
+//! - `"raw"`：转录原文，不调用 LLM 润色（RAlt 单击）；
+//! - `"clean"`：转录 + 润色（现有 active style pack），缺省值，兼容旧客户端。
+//! 旧客户端不传 `mode` 或旧的 `translation:true` 行为不变。
 //!
 //! 服务端 → 客户端：
 //! - `{"type":"hello_ok","protocolVersion":2}`
@@ -96,6 +101,10 @@ struct ClientCommand {
     protocol_version: Option<u32>,
     #[serde(default)]
     translation: bool,
+    /// 启动时声明听写模式（可选，缺省走 clean 兼容旧客户端）：
+    /// `"raw"` = 转录原文不润色；`"clean"` = 转录 + 润色（现有 active style pack）。
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 /// 会话阶段。`Stopping` / `ResultPending` 不再要求心跳（录音已在收尾）。
@@ -429,10 +438,19 @@ async fn handle_connection(
                                     coordinator.last_finished_session().map(|s| s.id);
                                 coordinator.set_remote_capture_mode(true);
                                 let translation = command.translation;
-                                let start_result = if translation {
-                                    coordinator.start_dictation_with_translation().await
-                                } else {
-                                    coordinator.start_dictation().await
+                                let mode = command.mode.as_deref().unwrap_or("clean");
+                                log::info!(
+                                    "[lan-remote] start mode={mode} translation={translation} client={command_client_id}"
+                                );
+                                let start_result = match mode {
+                                    "raw" => coordinator.start_dictation_raw().await,
+                                    _ => {
+                                        if translation {
+                                            coordinator.start_dictation_with_translation().await
+                                        } else {
+                                            coordinator.start_dictation().await
+                                        }
+                                    }
                                 };
                                 if let Err(error) = start_result {
                                     coordinator.set_remote_capture_mode(false);

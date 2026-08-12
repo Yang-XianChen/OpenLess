@@ -20,6 +20,7 @@ import {
   requestAndroidShizukuPermission,
   restartAndroidKeepalive,
   runAndroidKeepaliveSelfTest,
+  runAndroidProcessKillSelfTest,
 } from '../lib/androidIpc';
 import type {
   AndroidAccessibilityStatus,
@@ -564,6 +565,17 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
             >
               {t('settings.permissions.androidKeepaliveSelfTest')}
             </Btn>
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const confirmed = window.confirm(t('settings.permissions.androidKeepaliveSelfTestKillConfirm'));
+                if (!confirmed) return;
+                void runAndroidProcessKillSelfTest();
+              }}
+            >
+              {t('settings.permissions.androidKeepaliveSelfTestKill')}
+            </Btn>
             {keepaliveStatus?.notificationKeepaliveEnabled
               && keepaliveStatus?.notificationPermissionGranted === false && (
               <Btn
@@ -594,6 +606,20 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               lastCheckAt: keepaliveStatus?.lastCheckAt ?? '—',
             })}
           </span>
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', maxWidth: 300, textAlign: 'right' }}>
+            {t('settings.permissions.androidKeepaliveDiagHint', {
+              restartCount: keepaliveStatus?.restartCount ?? 0,
+              lastServiceStartAt: keepaliveStatus?.lastServiceStartAt ?? '—',
+              lastProcessDeathAt: keepaliveStatus?.lastProcessDeathAt ?? '—',
+            })}
+          </span>
+          {keepaliveStatus?.selfTestRecovered === true && (
+            <span style={{ fontSize: 11, color: 'var(--ol-ok)', maxWidth: 300, textAlign: 'right' }}>
+              {t('settings.permissions.androidKeepaliveSelfTestRecovered', {
+                recoveredAt: keepaliveStatus?.selfTestRecoveredAt ?? '—',
+              })}
+            </span>
+          )}
         </div>
       </SettingRow>
       </>
