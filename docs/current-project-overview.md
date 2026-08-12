@@ -79,22 +79,15 @@ OpenLess 是一个语音输入 / 听写工具，核心目标是“说话 → 本
   - 结果粘贴两次；
   - 关闭后自动重新开始。
 
-### 已形成方案
+### 已实现（2026-08-12）
 
-已编写设计文档：
-
-- `docs/remote-client-session-lock-and-heartbeat-plan.md`
-
-方案要点：
-
-- 引入 `sessionId` 会话锁；
-- 客户端会话期间每 1 秒发送心跳；
-- 服务端 3 秒未收到心跳自动取消录音并释放锁；
-- `start` / `stop` 幂等；
-- `resultId` + ACK 防止重复粘贴；
-- 增加 `status` 查询、单实例锁、协议版本握手。
-
-> 当前仍处于计划阶段，尚未实现。
+- 引入 `sessionId` 会话锁：全局同一时刻只有一个活跃听写会话，按 `clientId` 持有；
+- 客户端会话期间每 1 秒发送心跳，服务端 3 秒未收到心跳自动取消录音、释放锁并关闭连接；
+- `start` / `stop` / `cancel` 幂等，重复 stop 返回 `alreadyStopped`，不会二次粘贴；
+- `resultId` + ACK 结果去重：客户端按 resultId 去重，插入成功后回 ACK；
+- 新增 `hello` 协议版本握手与 `status` 状态查询；
+- 客户端新增单实例锁，第二个实例直接退出；
+- 设计文档：`docs/remote-client-session-lock-and-heartbeat-plan.md`
 
 ## 6. 桌面端 OpenLess（源码保留备用）
 

@@ -1,6 +1,6 @@
-# OpenLess 远程听写：会话锁与心跳协议设计（草案）
+# OpenLess 远程听写：会话锁与心跳协议设计
 
-> 状态：计划阶段，尚未实现  
+> 状态：已实现（2026-08-12）
 > 范围：`openless-all/remote-client`（电脑端）与 `openless-all/app/src-tauri/src/android/lan_server.rs`（手机端）
 
 ## 1. 背景与问题

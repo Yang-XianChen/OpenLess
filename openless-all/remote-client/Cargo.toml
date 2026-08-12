@@ -9,7 +9,9 @@ license = "MIT"
 arboard = "3"
 clap = { version = "4", features = ["derive"] }
 dbus = "0.9"
+fs2 = "0.4"
 local-ip-address = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tungstenite = { version = "0.24", features = ["handshake"] }
+uuid = { version = "1", features = ["v4"] }
