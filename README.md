@@ -10,16 +10,16 @@ OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转�
 - **Android 平台支持**：完整的 Android 应用代码与 CI 构建，包含麦克风录音、ASR/润色、悬浮窗、无障碍插入、Shizuku 辅助、凭据保管库、应用内更新，以及单像素悬浮窗保活（锁屏/后台录音）等能力。
 - **局域网远程听写（Android ↔ PC）**：Android 端启动后监听 `0.0.0.0:45678`，电脑端通过 WebSocket 触发热键录音，手机完成听写后将文本回传并插入电脑当前光标。
 - **电脑端 remote-client**：极简无界面 Linux 客户端，支持局域网自动发现、热键触发、切换/按住模式、连接状态提示，以及 Wayland 下的 fcitx5 输入法通道（`--fcitx`）。
-- **V10 增强**：后台自动发现与心跳、断线提示与自动重连提示、错误透传、单像素悬浮窗保活（1×1 透明、不可交互，锁屏/后台保持进程存活以继续录音），以及一对多连接的会话锁（同一时刻仅一个客户端持有听写会话）。
+- **协议 v2 增强**：后台自动发现与心跳、断线提示与自动重连提示、错误透传、单像素悬浮窗保活（1×1 透明、不可交互，锁屏/后台保持进程存活以继续录音）、一对多连接的会话锁（同一时刻仅一个客户端持有听写会话），以及会话心跳超时自动停录、`resultId` + ACK 结果去重。
 
 ## 已发布版本与资产
 
 | Release | 内容 | 说明 |
 | --- | --- | --- |
-| [android-lan-v10](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-v10)（最新） | Android arm64-v8a APK + Linux aarch64/x86_64 remote-client | 局域网远程听写版；APK 为 release 签名构建 |
-| android-lan-v9 | 已从 Releases 删除 | 旧版局域网发布，请改用 V10 |
+| [android-lan-preview](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-preview)（最新） | Android arm64-v8a APK + Linux aarch64/x86_64 remote-client | 局域网远程听写版（协议 v2：会话锁/心跳/结果去重）；APK 为 release 签名构建 |
+| android-lan-v9 / android-lan-v10 | 已从 Releases 删除 | 旧版局域网发布，请改用 android-lan-preview |
 
-### android-lan-v10 包含的组件
+### android-lan-preview 包含的组件
 
 | 资产 | 平台 | 作用 |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ OpenLess 是一款开源语音输入工具：按住热键说话，AI 负责转�
 
 ### 1. 安装手机端
 
-从 [android-lan-v10](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-v10) 下载 `OpenLess_1.3.16_android-lan_arm64-v8a.apk` 并安装。打开 OpenLess 后，应用会在 `0.0.0.0:45678` 监听局域网连接；使用期间请保持手机与电脑在同一可信网络；如需锁屏/后台录音，请在设置中开启悬浮窗权限与「单像素悬浮窗保活」；未开启时建议保持应用前台/亮屏。
+从 [android-lan-preview](https://github.com/Yang-XianChen/OpenLess/releases/tag/android-lan-preview) 下载 `OpenLess_1.3.16_android-lan_arm64-v8a.apk` 并安装。打开 OpenLess 后，应用会在 `0.0.0.0:45678` 监听局域网连接；使用期间请保持手机与电脑在同一可信网络；如需锁屏/后台录音，请在设置中开启悬浮窗权限与「单像素悬浮窗保活」；未开启时建议保持应用前台/亮屏。
 
 > 若之前安装过旧版，覆盖安装前请先卸载旧版。
 

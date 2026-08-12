@@ -58,7 +58,7 @@ OpenLess 是一个语音输入 / 听写工具，核心目标是“说话 → 本
 - 自动发现监听 `45678` 的手机；
 - 通过 fcitx5 捕获右 Alt，切换模式下按一下开始、再按一下结束；
 - 通过 fcitx5 `CommitText` 写回文本，失败时回退剪贴板；
-- 已从 GitHub Release `android-lan-v10` 重新安装 `openless-remote-client-linux-x86_64`。
+- 已从 GitHub Release `android-lan-preview` 重新安装 `openless-remote-client-linux-x86_64`。
 
 ### 运行状态
 
