@@ -12,6 +12,15 @@ on:
     tags:
       - 'v*-tauri'
   workflow_dispatch:
+    inputs:
+      arch:
+        description: 'ABI selection for manual dispatch (default: arm64-v8a only)'
+        required: false
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - arm64-v8a
+          - all
 
 jobs:
   build-android-apk:
@@ -36,6 +45,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
           set -euo pipefail
           is_tag=false
@@ -43,6 +53,33 @@ jobs:
             is_tag=true
           fi
           echo "is_tag_release=$is_tag" >> "$GITHUB_OUTPUT"
+
+          # ABI 选择：tag release 恒为全部 4 个 ABI；manual dispatch 默认只打 arm64-v8a。
+          if $is_tag; then
+            arch=all
+          else
+            arch="${INPUT_ARCH:-arm64-v8a}"
+            case "$arch" in
+              arm64-v8a|all) ;;
+              *) echo "::error::Unsupported arch '$arch'. Choose arm64-v8a or all."; exit 1 ;;
+            esac
+          fi
+          case "$arch" in
+            arm64-v8a)
+              tauri_targets="aarch64"
+              rust_targets="aarch64-linux-android"
+              abis="arm64-v8a"
+              ;;
+            all)
+              tauri_targets="aarch64 armv7 i686 x86_64"
+              rust_targets="aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android"
+              abis="arm64-v8a armeabi-v7a x86 x86_64"
+              ;;
+          esac
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+          echo "tauri_targets=$tauri_targets" >> "$GITHUB_OUTPUT"
+          echo "rust_targets=$rust_targets" >> "$GITHUB_OUTPUT"
+          echo "abis=$abis" >> "$GITHUB_OUTPUT"
 
           has_keystore=true
           for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
@@ -59,14 +96,14 @@ jobs:
             echo "signing_label=Tag release with release keystore" >> "$GITHUB_OUTPUT"
           elif $has_keystore; then
             echo "mode=release" >> "$GITHUB_OUTPUT"
-            echo "label=dispatch-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "label=dispatch-run-${{ github.run_number }}-$arch" >> "$GITHUB_OUTPUT"
             echo "signing=dispatch-release" >> "$GITHUB_OUTPUT"
-            echo "signing_label=Manual dispatch with release keystore (overlay install OK)" >> "$GITHUB_OUTPUT"
+            echo "signing_label=Manual dispatch with release keystore (overlay install OK, $arch)" >> "$GITHUB_OUTPUT"
           else
             echo "mode=debug" >> "$GITHUB_OUTPUT"
-            echo "label=unsigned-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "label=unsigned-run-${{ github.run_number }}-$arch" >> "$GITHUB_OUTPUT"
             echo "signing=debug-fallback" >> "$GITHUB_OUTPUT"
-            echo "signing_label=Unsigned debug fallback (no keystore secrets)" >> "$GITHUB_OUTPUT"
+            echo "signing_label=Unsigned debug fallback (no keystore secrets, $arch)" >> "$GITHUB_OUTPUT"
             echo "::notice title=Unsigned debug APK::ANDROID_KEYSTORE_* secrets not configured. Building debug APK without release signing. Overlay install and user data preservation require the release keystore; uninstall before installing if replacing a signed build."
           fi
 
@@ -142,11 +179,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: >-
-            aarch64-linux-android,
-            armv7-linux-androideabi,
-            i686-linux-android,
-            x86_64-linux-android
+          targets: ${{ steps.mode.outputs.rust_targets }}
 
       - name: Cache Cargo
         uses: swatinem/rust-cache@v2
@@ -219,12 +252,22 @@ jobs:
       - name: Build Android debug APK
         if: steps.mode.outputs.mode == 'debug'
         working-directory: openless-all/app
-        run: npm run tauri:android:build:debug
+        env:
+          TAURI_ANDROID_TARGETS: ${{ steps.mode.outputs.tauri_targets }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          npm run tauri -- android build --apk --debug --target $TAURI_ANDROID_TARGETS --split-per-abi
 
       - name: Build Android release APK
         if: steps.mode.outputs.mode == 'release'
         working-directory: openless-all/app
-        run: npm run tauri:android:build:release
+        env:
+          TAURI_ANDROID_TARGETS: ${{ steps.mode.outputs.tauri_targets }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          npm run tauri -- android build --apk --target $TAURI_ANDROID_TARGETS --split-per-abi
 
       - name: Free disk before artifact upload
         shell: bash
@@ -242,6 +285,7 @@ jobs:
         env:
           OPENLESS_APK_MODE: ${{ steps.mode.outputs.mode }}
           OPENLESS_APK_LABEL: ${{ steps.mode.outputs.label }}
+          OPENLESS_APK_ABIS: ${{ steps.mode.outputs.abis }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -252,7 +296,9 @@ jobs:
           import zipfile
           from pathlib import Path
 
-          expected = {
+          # 仅收集本次请求的 ABI；其余不算缺失（tag=all → 全部 4 个）。
+          requested = os.environ["OPENLESS_APK_ABIS"].split()
+          all_abis = {
               "arm64-v8a": "arm64_v8a",
               "armeabi-v7a": "armeabi_v7a",
               "x86": "x86",
@@ -264,6 +310,7 @@ jobs:
               "x86": "i686",
               "x86_64": "x86_64",
           }
+          expected = {abi: key for abi, key in all_abis.items() if abi in requested}
           root = Path("src-tauri/gen/android")
           mode = os.environ["OPENLESS_APK_MODE"]
           label = os.environ["OPENLESS_APK_LABEL"]
@@ -291,7 +338,7 @@ jobs:
                   print(f"::error::{apk} contains ABI directories {abis}; expected exactly one ABI per APK")
                   sys.exit(1)
               abi = abis[0]
-              if abi not in expected:
+              if abi not in all_abis:
                   print(f"::error::{apk} contains unexpected ABI {abi}")
                   sys.exit(1)
               if abi in found:
@@ -367,6 +414,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Upload Android APK artifact (arm64-v8a)
+        if: contains(steps.mode.outputs.abis, 'arm64-v8a')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-arm64-v8a' || 'openless-android-debug-arm64-v8a' }}
@@ -374,6 +422,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Android APK artifact (armeabi-v7a)
+        if: contains(steps.mode.outputs.abis, 'armeabi-v7a')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-armeabi-v7a' || 'openless-android-debug-armeabi-v7a' }}
@@ -381,6 +430,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Android APK artifact (x86)
+        if: contains(steps.mode.outputs.abis, 'x86')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-x86' || 'openless-android-debug-x86' }}
@@ -388,6 +438,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Android APK artifact (x86_64)
+        if: contains(steps.mode.outputs.abis, 'x86_64')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.mode.outputs.mode == 'release' && 'openless-android-release-x86_64' || 'openless-android-debug-x86_64' }}
