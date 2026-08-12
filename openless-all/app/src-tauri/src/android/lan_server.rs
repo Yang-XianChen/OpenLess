@@ -32,6 +32,7 @@
 //! 安全说明：这是局域网 PoC，未做认证；请仅在可信网络使用。
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -44,6 +45,14 @@ use crate::coordinator::Coordinator;
 
 /// 默认监听端口（固定，PoC）。
 pub const DEFAULT_PORT: u16 = 45678;
+
+const LAN_STATE_IDLE: u8 = 0;
+const LAN_STATE_STARTING: u8 = 1;
+const LAN_STATE_LISTENING: u8 = 2;
+
+static LAN_STATE: AtomicU8 = AtomicU8::new(LAN_STATE_IDLE);
+static LAN_LAST_ERROR: StdMutex<Option<String>> = StdMutex::new(None);
+static LAN_SHUTDOWN: StdMutex<Option<tokio::sync::oneshot::Sender<()>>> = StdMutex::new(None);
 
 /// 等待最终文本落历史的超时。
 const RESULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -65,37 +74,106 @@ struct ActiveSession {
 
 /// 启动 LAN 服务。绑定失败只记日志，不 panic。
 pub fn start(coordinator: Arc<Coordinator>) {
+    ensure_started(coordinator);
+}
+
+/// 幂等启动：已监听时直接返回；启动中不重复发起；失败后允许看门狗再次调用。
+pub fn ensure_started(coordinator: Arc<Coordinator>) {
+    if LAN_STATE.load(Ordering::Relaxed) != LAN_STATE_IDLE {
+        return;
+    }
+    if LAN_STATE
+        .compare_exchange(
+            LAN_STATE_IDLE,
+            LAN_STATE_STARTING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return;
+    }
+
     tauri::async_runtime::spawn(async move {
         let listener = match TcpListener::bind(("0.0.0.0", DEFAULT_PORT)).await {
             Ok(listener) => listener,
             Err(error) => {
-                log::error!("[lan-remote] bind 0.0.0.0:{DEFAULT_PORT} failed: {error}");
+                let message = format!("bind 0.0.0.0:{DEFAULT_PORT} failed: {error}");
+                log::error!("[lan-remote] {message}");
+                *LAN_LAST_ERROR.lock().unwrap() = Some(message);
+                LAN_STATE.store(LAN_STATE_IDLE, Ordering::SeqCst);
                 return;
             }
         };
+        *LAN_LAST_ERROR.lock().unwrap() = None;
+        LAN_STATE.store(LAN_STATE_LISTENING, Ordering::SeqCst);
         log::info!("[lan-remote] listening on 0.0.0.0:{DEFAULT_PORT}");
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        *LAN_SHUTDOWN.lock().unwrap() = Some(shutdown_tx);
         // 全局会话占用表：同一时刻只允许一个桌面客户端持有活跃听写会话。
         let registry = Arc::new(StdMutex::new(None::<SocketAddr>));
         loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    let coordinator = Arc::clone(&coordinator);
-                    let registry = Arc::clone(&registry);
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(error) =
-                            handle_connection(stream, addr, coordinator, registry).await
-                        {
-                            log::warn!("[lan-remote] connection {addr} ended: {error}");
-                        }
-                    });
+            tokio::select! {
+                _ = &mut shutdown_rx => {
+                    log::info!("[lan-remote] listener stopped by keepalive restart");
+                    break;
                 }
-                Err(error) => {
-                    log::warn!("[lan-remote] accept failed: {error}");
-                    tokio::time::sleep(Duration::from_millis(300)).await;
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((stream, addr)) => {
+                            let coordinator = Arc::clone(&coordinator);
+                            let registry = Arc::clone(&registry);
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) =
+                                    handle_connection(stream, addr, coordinator, registry).await
+                                {
+                                    log::warn!("[lan-remote] connection {addr} ended: {error}");
+                                }
+                            });
+                        }
+                        Err(error) => {
+                            log::warn!("[lan-remote] accept failed: {error}");
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                        }
+                    }
                 }
             }
         }
     });
+}
+
+/// 当前 LAN 服务是否已成功监听。
+pub fn lan_server_is_running() -> bool {
+    LAN_STATE.load(Ordering::Relaxed) == LAN_STATE_LISTENING
+}
+
+/// 最近一次启动失败原因；无失败时为 `None`。
+pub fn lan_server_last_error() -> Option<String> {
+    LAN_LAST_ERROR.lock().unwrap().clone()
+}
+
+/// 强制重置后重新尝试启动（供看门狗/自测使用）。
+pub fn request_lan_server_restart(coordinator: Arc<Coordinator>) {
+    if lan_server_is_running() {
+        return;
+    }
+    if LAN_STATE.load(Ordering::Relaxed) == LAN_STATE_STARTING {
+        return;
+    }
+    if let Some(tx) = LAN_SHUTDOWN.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+    LAN_STATE.store(LAN_STATE_IDLE, Ordering::SeqCst);
+    ensure_started(coordinator);
+}
+
+/// 自测用：把 LAN 服务标记为“丢失”，让看门狗/手动重启路径走一遍。
+pub fn simulate_lan_server_loss() {
+    if let Some(tx) = LAN_SHUTDOWN.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+    LAN_STATE.store(LAN_STATE_IDLE, Ordering::SeqCst);
+    *LAN_LAST_ERROR.lock().unwrap() = Some("自测：模拟 LAN 服务丢失".to_string());
 }
 
 async fn handle_connection(
@@ -151,12 +229,12 @@ async fn handle_connection(
                             .await?;
                             continue;
                         }
-                        if let Err(error) = crate::android::native_bridge::promote_remote_recording()
+                        if let Err(error) =
+                            crate::android::native_bridge::promote_remote_recording()
                         {
                             log::warn!("[lan-remote] promote foreground service failed: {error}");
                         }
-                        let previous_first_id =
-                            coordinator.last_finished_session().map(|s| s.id);
+                        let previous_first_id = coordinator.last_finished_session().map(|s| s.id);
                         coordinator.set_remote_capture_mode(true);
                         let translation = command.translation;
                         let start_result = if translation {
@@ -167,11 +245,8 @@ async fn handle_connection(
                         if let Err(error) = start_result {
                             coordinator.set_remote_capture_mode(false);
                             release_owner(&registry, addr);
-                            send_json(
-                                &mut ws,
-                                error_msg(&format!("手机端启动听写失败：{error}")),
-                            )
-                            .await?;
+                            send_json(&mut ws, error_msg(&format!("手机端启动听写失败：{error}")))
+                                .await?;
                             continue;
                         }
                         session = Some(ActiveSession {
@@ -212,11 +287,8 @@ async fn handle_connection(
                                 .await?;
                             }
                             None => {
-                                send_json(
-                                    &mut ws,
-                                    error_msg("手机端处理超时，未返回听写结果"),
-                                )
-                                .await?;
+                                send_json(&mut ws, error_msg("手机端处理超时，未返回听写结果"))
+                                    .await?;
                             }
                         }
                         coordinator.set_remote_capture_mode(false);
@@ -232,11 +304,7 @@ async fn handle_connection(
                         send_json(&mut ws, serde_json::json!({ "type": "pong" })).await?;
                     }
                     other => {
-                        send_json(
-                            &mut ws,
-                            error_msg(&format!("unknown command: {other}")),
-                        )
-                        .await?;
+                        send_json(&mut ws, error_msg(&format!("unknown command: {other}"))).await?;
                     }
                 }
             }

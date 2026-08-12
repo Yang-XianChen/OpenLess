@@ -110,6 +110,7 @@ const previousPrefs: UserPreferences = {
   androidOverlayCancelSwipeDirection: 'up',
   androidOverlaySizeDp: 72,
   androidSinglePixelKeepalive: false,
+  androidNotificationKeepalive: true,
 };
 
 const nextPrefs: UserPreferences = {

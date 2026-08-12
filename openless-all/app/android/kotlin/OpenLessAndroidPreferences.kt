@@ -18,6 +18,7 @@ object OpenLessAndroidPreferences {
     private const val KEY_OVERLAY_CANCEL_SWIPE_DIRECTION = "androidOverlayCancelSwipeDirection"
     private const val KEY_OVERLAY_SIZE_DP = "androidOverlaySizeDp"
     private const val KEY_SINGLE_PIXEL_KEEPALIVE = "androidSinglePixelKeepalive"
+    private const val KEY_NOTIFICATION_KEEPALIVE = "androidNotificationKeepalive"
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
     private const val MAX_OVERLAY_SIZE_DP = 120
@@ -66,6 +67,12 @@ object OpenLessAndroidPreferences {
     fun singlePixelKeepalive(context: Context): Boolean {
         return readPreferenceString(context, KEY_SINGLE_PIXEL_KEEPALIVE)?.toBooleanStrictOrNull()
             ?: false
+    }
+
+    /** 通知保活：默认开启；关闭后前台服务/通知不再常驻。 */
+    fun notificationKeepalive(context: Context): Boolean {
+        return readPreferenceString(context, KEY_NOTIFICATION_KEEPALIVE)?.toBooleanStrictOrNull()
+            ?: true
     }
 
     private fun readPreferenceString(context: Context, key: String): String? {

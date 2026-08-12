@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -13,6 +15,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -22,7 +25,10 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import org.json.JSONObject
 
 /**
  * Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control.
@@ -45,6 +51,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var pendingSwipe: SwipeDirection? = null
     private var swipeConsumed = false
     private var keepAliveView: View? = null
+    private var keepaliveWatchdogStarted = false
+    private val keepaliveWatchdog = Executors.newSingleThreadScheduledExecutor()
 
     private lateinit var iconContainer: FrameLayout
     private lateinit var iconButton: ImageView
@@ -55,6 +63,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         super.onCreate()
         instance = this
         OpenLessOverlayBridge.listener = this
+        startKeepaliveWatchdog()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,6 +71,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             TAG,
             "onStartCommand action=${intent?.action} startId=$startId rootAttached=${rootView?.isAttachedToWindow}",
         )
+        if (intent?.action == null) {
+            // START_STICKY 重启：先尝试恢复 Rust 后端，再恢复前台服务。
+            runCatching { OpenLessNative.nativeEnsureRemoteBackend(this) }
+        }
         when (intent?.action) {
             ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
@@ -80,18 +93,25 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
             }
             ACTION_LAN_RELEASE -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                if (OpenLessAndroidPreferences.notificationKeepalive(this)) {
+                    // 通知保活开启时，释放录音会话后继续保留前台服务与常驻通知。
+                    ensureKeepaliveForeground()
                 } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
+                    foregroundActive = false
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
+                    stopSelf(startId)
                 }
-                stopSelf(startId)
             }
             ACTION_KEEPALIVE_SHOW -> showSinglePixelOverlay()
             ACTION_KEEPALIVE_HIDE -> hideSinglePixelOverlay()
             ACTION_HIDE -> {
                 hideOverlay()
+                foregroundActive = false
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                 } else {
@@ -109,10 +129,21 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         if (OpenLessAndroidPreferences.singlePixelKeepalive(this)) {
             showSinglePixelOverlay()
         }
+        // 通知保活开启时，无论以什么动作拉起服务，都确保前台服务与常驻通知存在。
+        if (
+            OpenLessAndroidPreferences.notificationKeepalive(this) &&
+            intent?.action != ACTION_LAN_START_RECORDING
+        ) {
+            if (!ensureKeepaliveForeground()) {
+                updateKeepaliveNotification(false)
+            }
+        }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        keepaliveWatchdog.shutdownNow()
+        foregroundActive = false
         if (OpenLessOverlayBridge.listener === this) {
             OpenLessOverlayBridge.listener = null
         }
@@ -790,9 +821,14 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return tryPromoteForeground("录音中")
     }
 
-    private fun tryPromoteForeground(notificationText: String): Boolean {
+    private fun tryPromoteForeground(
+        notificationText: String,
+        showPermissionToast: Boolean = true,
+    ): Boolean {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            showToast("请先授予麦克风权限")
+            if (showPermissionToast) {
+                showToast("请先授予麦克风权限")
+            }
             return false
         }
         val notification = buildNotification(notificationText)
@@ -806,10 +842,14 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
+            foregroundActive = true
             true
         } catch (error: SecurityException) {
             Log.w(TAG, "microphone foreground service not allowed from current state", error)
-            showToast("系统限制后台录音，请在 OpenLess 内开始")
+            foregroundActive = false
+            if (showPermissionToast) {
+                showToast("系统限制后台录音，请在 OpenLess 内开始")
+            }
             false
         }
     }
@@ -822,11 +862,93 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 NotificationChannel(channelId, "OpenLess Overlay", NotificationManager.IMPORTANCE_LOW),
             )
         }
-        return Notification.Builder(this, channelId)
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val contentIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                this,
+                0,
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+        val builder = Notification.Builder(this, channelId)
             .setContentTitle("OpenLess")
             .setContentText(contentText)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .build()
+            .setOngoing(true)
+        if (contentIntent != null) {
+            builder.setContentIntent(contentIntent)
+        }
+        return builder.build()
+    }
+
+    private fun startKeepaliveWatchdog() {
+        if (keepaliveWatchdogStarted) return
+        keepaliveWatchdogStarted = true
+        keepaliveWatchdog.scheduleWithFixedDelay({
+            try {
+                val backendOk = OpenLessNative.nativeEnsureRemoteBackend(this)
+                var foregroundOk = true
+                if (backendOk && OpenLessAndroidPreferences.notificationKeepalive(this)) {
+                    foregroundOk = ensureKeepaliveForeground()
+                }
+                updateKeepaliveNotification(backendOk && foregroundOk)
+            } catch (error: Throwable) {
+                Log.w(TAG, "keepalive watchdog failed", error)
+                updateKeepaliveNotification(false)
+            }
+        }, 0L, 5L, TimeUnit.SECONDS)
+    }
+
+    private fun ensureKeepaliveForeground(): Boolean {
+        if (!OpenLessAndroidPreferences.notificationKeepalive(this)) {
+            return false
+        }
+        if (foregroundActive) {
+            updateKeepaliveNotification(true)
+            return true
+        }
+        return tryPromoteForeground("远程听写待命", showPermissionToast = false)
+    }
+
+    private fun updateKeepaliveNotification(ok: Boolean) {
+        val lanRunning = OpenLessNative.nativeIsLanServerRunning()
+        val effectiveOk = ok && lanRunning
+        val lastError = OpenLessNative.nativeGetLanServerLastError()
+        val reason = when {
+            !lanRunning -> lastError ?: "后台服务未运行"
+            !foregroundActive -> "前台服务未运行；请检查麦克风和通知权限"
+            else -> "后台服务异常"
+        }
+        val text = if (effectiveOk) {
+            "远程听写待命，电脑端可直接使用"
+        } else {
+            lastKeepaliveFailure = reason
+            "远程听写服务异常：$reason；请打开 OpenLess 查看解决方案"
+        }
+        if (foregroundActive) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        buildNotification(text),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification(text))
+                }
+            } catch (error: Throwable) {
+                Log.w(TAG, "update keepalive notification failed", error)
+            }
+        } else if (!effectiveOk && OpenLessAndroidPreferences.notificationKeepalive(this)) {
+            // 前台服务尚未恢复时，先以普通通知把异常原因展示出来。
+            try {
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.notify(NOTIFICATION_ID, buildNotification(text))
+            } catch (error: Throwable) {
+                Log.w(TAG, "show keepalive failure notification failed", error)
+            }
+        }
     }
 
     private fun circleDrawable(color: Int, strokeColor: Int, strokeWidth: Int): GradientDrawable {
@@ -915,6 +1037,14 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     companion object {
+        @Volatile
+        @JvmStatic
+        var foregroundActive = false
+
+        @Volatile
+        @JvmStatic
+        var lastKeepaliveFailure: String? = null
+
         const val ACTION_SHOW = "com.openless.app.overlay.SHOW"
         const val ACTION_HIDE = "com.openless.app.overlay.HIDE"
         const val ACTION_REPLACE_OVERLAY = "com.openless.app.overlay.REPLACE_OVERLAY"
@@ -947,5 +1077,49 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         @Volatile
         var instance: OpenLessOverlayService? = null
             private set
+
+        @JvmStatic
+        fun getKeepaliveStatusJson(context: Context): String {
+            val status = JSONObject()
+            status.put("lanServerRunning", OpenLessNative.nativeIsLanServerRunning())
+            status.put("foregroundServiceRunning", foregroundActive)
+            status.put(
+                "notificationKeepaliveEnabled",
+                OpenLessAndroidPreferences.notificationKeepalive(context),
+            )
+            val nm = context.getSystemService(NotificationManager::class.java)
+            status.put("notificationPermissionGranted", nm.areNotificationsEnabled())
+            status.put("overlayPermissionGranted", Settings.canDrawOverlays(context))
+            status.put("batteryOptimizationRestricted", isBatteryOptimizationRestricted(context))
+            status.put(
+                "lastError",
+                OpenLessNative.nativeGetLanServerLastError() ?: lastKeepaliveFailure,
+            )
+            status.put("lastCheckAt", OpenLessNative.nativeGetKeepaliveLastCheckAt())
+            status.put("lastStatus", OpenLessNative.nativeGetKeepaliveLastStatus())
+            status.put("autoRecoverySupported", true)
+            return status.toString()
+        }
+
+        private fun isBatteryOptimizationRestricted(context: Context): Boolean {
+            val powerManager = context.getSystemService(POWER_SERVICE) as? PowerManager
+                ?: return false
+            return !powerManager.isIgnoringBatteryOptimizations(context.packageName)
+        }
+
+        @JvmStatic
+        fun openNotificationSettings(context: Context) {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
+
+        @JvmStatic
+        fun openBatteryOptimizationSettings(context: Context) {
+            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
     }
 }

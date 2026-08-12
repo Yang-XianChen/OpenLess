@@ -503,6 +503,8 @@ export interface UserPreferences {
   androidOverlaySizeDp: number;
   /** Android: 1x1 non-interactive overlay to keep the process alive. */
   androidSinglePixelKeepalive: boolean;
+  /** Android: 常驻通知/前台服务保活，默认开启。 */
+  androidNotificationKeepalive: boolean;
 }
 
 export interface MarketplaceListItem {

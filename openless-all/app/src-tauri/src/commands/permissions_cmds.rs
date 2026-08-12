@@ -11,6 +11,35 @@ pub fn get_android_overlay_status() -> AndroidOverlayStatus {
 }
 
 #[tauri::command]
+pub fn get_android_keepalive_status() -> serde_json::Value {
+    crate::android::get_android_keepalive_status()
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn restart_android_keepalive() -> Result<(), String> {
+    crate::mobile_runtime::request_android_lan_server_restart()
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn open_android_notification_settings() -> Result<(), String> {
+    crate::android::open_android_notification_settings()
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn open_android_battery_settings() -> Result<(), String> {
+    crate::android::open_android_battery_settings()
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn run_android_keepalive_self_test() -> Result<serde_json::Value, String> {
+    crate::mobile_runtime::run_android_keepalive_self_test()
+}
+
+#[tauri::command]
 pub fn request_android_overlay_permission() -> crate::android::AndroidOverlayPermissionResult {
     crate::android::request_android_overlay_permission()
 }

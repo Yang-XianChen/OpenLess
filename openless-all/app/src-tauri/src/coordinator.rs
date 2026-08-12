@@ -276,7 +276,11 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         let Some(window) = app.get_webview_window("capsule") else {
             return;
         };
-        let _ = app.emit_to("capsule", "vocab:suggested", Vec::<crate::types::PendingCorrection>::new());
+        let _ = app.emit_to(
+            "capsule",
+            "vocab:suggested",
+            Vec::<crate::types::PendingCorrection>::new(),
+        );
         // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
         #[cfg(not(mobile))]
         if let Err(e) = window.set_ignore_cursor_events(true) {
@@ -309,9 +313,7 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
 /// 这条主路径，也就是上面那个 bug 的实际触发路径。三处各写各的，漏一处就等于没修。
 pub(crate) fn disarm_edit_watch(inner: &Arc<Inner>) {
     *inner.edit_watcher.lock() = None;
-    inner
-        .edit_watch_generation
-        .fetch_add(1, Ordering::SeqCst);
+    inner.edit_watch_generation.fetch_add(1, Ordering::SeqCst);
 }
 
 /// 把卡片放到屏幕**右下角**。
@@ -1153,7 +1155,7 @@ impl Coordinator {
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 edit_watcher: Mutex::new(None),
-                    edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
+                edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                 pending_corrections: Mutex::new(Vec::new()),
                 vocab_card_visible: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -1294,6 +1296,10 @@ impl Coordinator {
         self.inner.prefs.get().android_single_pixel_keepalive
     }
 
+    pub fn android_notification_keepalive_enabled(&self) -> bool {
+        self.inner.prefs.get().android_notification_keepalive
+    }
+
     pub fn apply_android_overlay_settings_change(
         &self,
         previous: &crate::types::UserPreferences,
@@ -1303,6 +1309,13 @@ impl Coordinator {
         {
             if previous.android_single_pixel_keepalive != next.android_single_pixel_keepalive {
                 crate::android::apply_single_pixel_keepalive(next.android_single_pixel_keepalive);
+            }
+            if previous.android_notification_keepalive != next.android_notification_keepalive {
+                if next.android_notification_keepalive {
+                    let _ = crate::android::native_bridge::promote_remote_recording();
+                } else {
+                    let _ = crate::android::native_bridge::release_remote_recording();
+                }
             }
             use crate::types::android_types::{
                 classify_android_overlay_settings_change, AndroidOverlaySettingsAction,
@@ -1347,8 +1360,8 @@ impl Coordinator {
             match (from, to) {
                 (
                     AndroidOverlayTrigger::Background
-                        | AndroidOverlayTrigger::Keyboard
-                        | AndroidOverlayTrigger::Off,
+                    | AndroidOverlayTrigger::Keyboard
+                    | AndroidOverlayTrigger::Off,
                     AndroidOverlayTrigger::Always,
                 ) => {
                     let _ = crate::android::replace_android_overlay();
@@ -1356,8 +1369,8 @@ impl Coordinator {
                 (
                     AndroidOverlayTrigger::Always,
                     AndroidOverlayTrigger::Background
-                        | AndroidOverlayTrigger::Keyboard
-                        | AndroidOverlayTrigger::Off,
+                    | AndroidOverlayTrigger::Keyboard
+                    | AndroidOverlayTrigger::Off,
                 ) => {
                     let _ = crate::android::hide_android_overlay();
                 }
@@ -2378,10 +2391,8 @@ impl Coordinator {
                 .get_or_default_active(&prefs.active_style_pack_id)
                 .map_err(|e| e.to_string())?,
         };
-        let style_system_prompt = crate::types::style_pack_prompt(
-            &pack,
-            crate::types::StylePromptKind::DictationAsr,
-        );
+        let style_system_prompt =
+            crate::types::style_pack_prompt(&pack, crate::types::StylePromptKind::DictationAsr);
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
         let output_language_preference = prefs.output_language_preference;
@@ -2533,12 +2544,10 @@ impl Coordinator {
                     .map_err(|_| "重新转录超时".to_string())?
                     .map_err(|e| e.to_string())?
             }
-            ActiveAsr::ElevenLabs(e) => {
-                tokio::time::timeout(elevenlabs_timeout, e.transcribe())
-                    .await
-                    .map_err(|_| "重新转录超时".to_string())?
-                    .map_err(|e| e.to_string())?
-            }
+            ActiveAsr::ElevenLabs(e) => tokio::time::timeout(elevenlabs_timeout, e.transcribe())
+                .await
+                .map_err(|_| "重新转录超时".to_string())?
+                .map_err(|e| e.to_string())?,
             #[cfg(target_os = "windows")]
             ActiveAsr::FoundryLocalWhisper(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
@@ -3401,7 +3410,10 @@ mod tests {
         let ordered = super::prioritize_vocab_for_asr(entries);
 
         let pos = |p: &str| ordered.iter().position(|x| x == p).expect("phrase kept");
-        assert!(pos("hermes") < pos("scrap"), "命中多的必须排在刚收进来的碎片前面");
+        assert!(
+            pos("hermes") < pos("scrap"),
+            "命中多的必须排在刚收进来的碎片前面"
+        );
         assert!(pos("win-shukong") < pos("scrap"));
         assert!(pos("hermes") < pos("win-shukong"), "命中多的在前");
     }
@@ -3445,7 +3457,10 @@ mod tests {
     fn learned_vocab_does_not_consume_fresh_manual_seats() {
         let mut entries = Vec::new();
         for i in 0..super::FRESH_VOCAB_SEATS {
-            entries.push(learned_vocab_entry(&format!("learned{i}"), 1_000 - i as u64));
+            entries.push(learned_vocab_entry(
+                &format!("learned{i}"),
+                1_000 - i as u64,
+            ));
             entries.push(vocab_entry(&format!("manual{i}"), 0));
         }
 

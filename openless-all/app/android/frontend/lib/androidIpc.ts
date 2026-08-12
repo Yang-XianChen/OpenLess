@@ -2,6 +2,7 @@ import { invokeOrMock } from '../../../src/lib/ipc';
 import type {
   AndroidAccessibilityRecoveryResult,
   AndroidAccessibilityStatus,
+  AndroidKeepaliveStatus,
   AndroidOverlayStatus,
   AndroidShizukuActionResult,
   AndroidShizukuStatus,
@@ -12,6 +13,43 @@ export function getAndroidOverlayStatus(): Promise<AndroidOverlayStatus> {
     permission: 'notAndroid',
     overlayVisible: false,
     message: 'Android overlay is only available on Android',
+  }));
+}
+
+export function getAndroidKeepaliveStatus(): Promise<AndroidKeepaliveStatus> {
+  return invokeOrMock('get_android_keepalive_status', undefined, () => ({
+    lanServerRunning: false,
+    foregroundServiceRunning: false,
+    notificationKeepaliveEnabled: true,
+    notificationPermissionGranted: true,
+    overlayPermissionGranted: false,
+    batteryOptimizationRestricted: true,
+    lastError: null,
+    lastCheckAt: null,
+    lastStatus: null,
+    autoRecoverySupported: false,
+  }));
+}
+
+export function restartAndroidKeepalive(): Promise<void> {
+  return invokeOrMock('restart_android_keepalive', undefined, () => undefined);
+}
+
+export function openAndroidNotificationSettings(): Promise<void> {
+  return invokeOrMock('open_android_notification_settings', undefined, () => undefined);
+}
+
+export function openAndroidBatterySettings(): Promise<void> {
+  return invokeOrMock('open_android_battery_settings', undefined, () => undefined);
+}
+
+export function runAndroidKeepaliveSelfTest(): Promise<{
+  simulatedFailure: boolean;
+  autoRecovered: boolean;
+}> {
+  return invokeOrMock('run_android_keepalive_self_test', undefined, () => ({
+    simulatedFailure: true,
+    autoRecovered: true,
   }));
 }
 

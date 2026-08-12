@@ -1,5 +1,7 @@
 package com.openless.app
 
+import android.content.Context
+
 /**
  * JNI bridge from Kotlin overlay / lifecycle code into Rust Coordinator.
  */
@@ -41,4 +43,14 @@ object OpenLessNative {
     @JvmStatic external fun nativeNotifyOverlayPermissionChanged(context: android.content.Context)
 
     @JvmStatic external fun nativeNotifyOverlayDestroyed()
+
+    @JvmStatic external fun nativeEnsureRemoteBackend(context: Context): Boolean
+
+    @JvmStatic external fun nativeIsLanServerRunning(): Boolean
+
+    @JvmStatic external fun nativeGetLanServerLastError(): String?
+
+    @JvmStatic external fun nativeGetKeepaliveLastCheckAt(): String?
+
+    @JvmStatic external fun nativeGetKeepaliveLastStatus(): String?
 }

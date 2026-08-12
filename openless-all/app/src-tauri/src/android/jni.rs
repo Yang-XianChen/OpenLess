@@ -42,7 +42,7 @@ pub mod android {
         Ok(())
     }
 
-    fn load_context_class<'local>(
+    pub(crate) fn load_context_class<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
         class_name: &str,
@@ -132,32 +132,42 @@ pub mod android {
     /// Returns the app-private files directory supplied by Android's Context.
     pub(crate) fn app_files_dir() -> Result<String, String> {
         // Persistence initializes before mobile_runtime::setup initializes
-        // ndk-context, so use Tao's non-panicking activity registry here.
-        with_tao_android_env(|env, context| {
-            let directory = env
-                .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
-                .and_then(|value| value.l())
-                .map_err(|error| format!("Context.getFilesDir: {error}"))?;
-            if directory.is_null() {
-                return Err("Context.getFilesDir returned null".to_string());
-            }
-            let path = env
-                .call_method(&directory, "getAbsolutePath", "()Ljava/lang/String;", &[])
-                .and_then(|value| value.l())
-                .map_err(|error| format!("File.getAbsolutePath: {error}"))?;
-            if path.is_null() {
-                return Err("Context files directory has no path".to_string());
-            }
-            let path = env
-                .get_string(&JString::from(path))
-                .map_err(|error| format!("read Context files directory: {error}"))?
-                .to_string_lossy()
-                .into_owned();
-            if path.is_empty() {
-                return Err("Context files directory is empty".to_string());
-            }
-            Ok(path)
-        })
+        // ndk-context, so use Tao's non-panicking activity registry here; when the
+        // process is recreated by START_STICKY without MainActivity (no Tao context),
+        // fall back to ndk-context initialized from the Kotlin service.
+        match with_tao_android_env(|env, context| app_files_dir_with(env, context)) {
+            Ok(path) => Ok(path),
+            Err(_) => with_android_env(|env, context| app_files_dir_with(env, context)),
+        }
+    }
+
+    fn app_files_dir_with<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<String, String> {
+        let directory = env
+            .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Context.getFilesDir: {error}"))?;
+        if directory.is_null() {
+            return Err("Context.getFilesDir returned null".to_string());
+        }
+        let path = env
+            .call_method(&directory, "getAbsolutePath", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| format!("File.getAbsolutePath: {error}"))?;
+        if path.is_null() {
+            return Err("Context files directory has no path".to_string());
+        }
+        let path = env
+            .get_string(&JString::from(path))
+            .map_err(|error| format!("read Context files directory: {error}"))?
+            .to_string_lossy()
+            .into_owned();
+        if path.is_empty() {
+            return Err("Context files directory is empty".to_string());
+        }
+        Ok(path)
     }
 
     /// Returns the app-private cache directory supplied by Android's Context.
@@ -315,16 +325,14 @@ pub mod android {
         plaintext: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
-        call_credential_vault_two_arrays("seal", plaintext, aad)
-            .map_err(classify_keystore_failure)
+        call_credential_vault_two_arrays("seal", plaintext, aad).map_err(classify_keystore_failure)
     }
 
     pub(crate) fn keystore_open(
         sealed: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
-        call_credential_vault_two_arrays("open", sealed, aad)
-            .map_err(classify_keystore_failure)
+        call_credential_vault_two_arrays("open", sealed, aad).map_err(classify_keystore_failure)
     }
 
     pub(crate) fn keystore_delete_key() -> Result<(), AndroidKeystoreFailure> {
@@ -430,12 +438,11 @@ pub mod android {
             &[JValue::Object(&action_obj)],
         )
         .map_err(|error| format!("set service action: {error}"))?;
-        let start_method =
-            if action.ends_with(".START_RECORDING") && android_sdk_int(env)? >= 26 {
-                "startForegroundService"
-            } else {
-                "startService"
-            };
+        let start_method = if action.ends_with(".START_RECORDING") && android_sdk_int(env)? >= 26 {
+            "startForegroundService"
+        } else {
+            "startService"
+        };
         env.call_method(
             context,
             start_method,
@@ -554,10 +561,7 @@ pub mod android {
 
     /// 读取剪贴板当前的第一条纯文本内容，用于在粘贴后还原。
     /// 失败或剪贴板为空时返回 None（不返回错误，避免阻塞主流程）。
-    pub fn get_primary_clip_text(
-        env: &mut JNIEnv,
-        context: &JObject,
-    ) -> Option<String> {
+    pub fn get_primary_clip_text(env: &mut JNIEnv, context: &JObject) -> Option<String> {
         let clipboard_name = jobject_str(env, "clipboard").ok()?;
         let clipboard = env
             .call_method(
@@ -593,12 +597,7 @@ pub mod android {
             return None;
         }
         let text_val = env
-            .call_method(
-                &item,
-                "getText",
-                "()Ljava/lang/CharSequence;",
-                &[],
-            )
+            .call_method(&item, "getText", "()Ljava/lang/CharSequence;", &[])
             .and_then(|value| value.l())
             .ok()?;
         if text_val.is_null() {
@@ -754,9 +753,14 @@ pub mod android {
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
     ) -> Result<JObject<'local>, String> {
-        env.call_method(context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
-            .and_then(|value| value.l())
-            .map_err(|error| format!("Context.getContentResolver: {error}"))
+        env.call_method(
+            context,
+            "getContentResolver",
+            "()Landroid/content/ContentResolver;",
+            &[],
+        )
+        .and_then(|value| value.l())
+        .map_err(|error| format!("Context.getContentResolver: {error}"))
     }
 
     fn jstring_object_to_option<'local>(
@@ -1054,9 +1058,7 @@ pub mod android {
                     ],
                 )
                 .and_then(|value| value.z())
-                .map_err(|error| {
-                    format!("call OpenLessContentWriter.writeBytes: {error}")
-                })?;
+                .map_err(|error| format!("call OpenLessContentWriter.writeBytes: {error}"))?;
             if ok {
                 Ok(())
             } else {

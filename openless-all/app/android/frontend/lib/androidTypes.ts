@@ -12,6 +12,19 @@ export interface AndroidOverlayStatus {
   message: string;
 }
 
+export interface AndroidKeepaliveStatus {
+  lanServerRunning: boolean;
+  foregroundServiceRunning: boolean;
+  notificationKeepaliveEnabled: boolean;
+  notificationPermissionGranted: boolean;
+  overlayPermissionGranted: boolean;
+  batteryOptimizationRestricted: boolean;
+  lastError?: string | null;
+  lastCheckAt?: string | null;
+  lastStatus?: string | null;
+  autoRecoverySupported: boolean;
+}
+
 export interface AndroidAccessibilityStatus {
   state: 'enabled' | 'notEnabled' | 'notAndroid';
   enabled: boolean;
@@ -70,7 +83,8 @@ export type AndroidPreferenceKey =
   | 'androidOverlayLeftSwipeAction'
   | 'androidOverlayCancelSwipeDirection'
   | 'androidOverlaySizeDp'
-  | 'androidSinglePixelKeepalive';
+  | 'androidSinglePixelKeepalive'
+  | 'androidNotificationKeepalive';
 
 export function normalizeAndroidOverlayTrigger(
   trigger: AndroidOverlayTrigger,

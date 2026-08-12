@@ -13,6 +13,7 @@ pub fn register_android_coordinator(coordinator: Arc<Coordinator>) {
 }
 
 /// 启动/提升为前台麦克风服务（局域网远程听写用，锁屏后仍可录音）。
+#[cfg(target_os = "android")]
 pub fn promote_remote_recording() -> Result<(), String> {
     crate::android::jni::android::with_android_env(|env, context| {
         crate::android::jni::android::start_service_action(
@@ -25,6 +26,7 @@ pub fn promote_remote_recording() -> Result<(), String> {
 }
 
 /// 结束局域网远程听写的前台麦克风服务。
+#[cfg(target_os = "android")]
 pub fn release_remote_recording() -> Result<(), String> {
     crate::android::jni::android::with_android_env(|env, context| {
         crate::android::jni::android::start_service_action(
@@ -467,5 +469,65 @@ mod jni_exports {
         _class: JClass,
     ) {
         notify_overlay_destroyed();
+    }
+
+    /// 供 Kotlin 前台服务在进程被系统重建时调用，重新拉起 Rust 后端与 LAN 服务。
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeEnsureRemoteBackend(
+        env: *mut JNIEnv,
+        _class: JClass,
+        context: JObject,
+    ) -> jboolean {
+        let ok = with_jni_context(env, context, |env, context| {
+            crate::mobile_runtime::ensure_android_backend_from_jni(env, context)
+        })
+        .is_ok();
+        crate::android::jni::android::export_jboolean(ok)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeIsLanServerRunning(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jboolean {
+        crate::android::jni::android::export_jboolean(
+            crate::android::lan_server::lan_server_is_running(),
+        )
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeGetLanServerLastError(
+        env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        let message = crate::android::lan_server::lan_server_last_error().unwrap_or_default();
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &message),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeGetKeepaliveLastCheckAt(
+        env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        let message = crate::mobile_runtime::keepalive_last_check_at().unwrap_or_default();
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &message),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeGetKeepaliveLastStatus(
+        env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        let message = crate::mobile_runtime::keepalive_last_status().unwrap_or_default();
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &message),
+            Err(_) => std::ptr::null_mut(),
+        }
     }
 }

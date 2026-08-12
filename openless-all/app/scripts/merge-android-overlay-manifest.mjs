@@ -11,6 +11,7 @@ const PERMISSIONS = [
   'android.permission.SYSTEM_ALERT_WINDOW',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.POST_NOTIFICATIONS',
 ];
 
 const APPLICATION_SNIPPET = `

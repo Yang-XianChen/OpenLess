@@ -189,7 +189,10 @@ pub struct FrontApp {
 pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
     let trimmed = label.trim();
     if trimmed.is_empty() {
-        return FrontApp { name: None, bundle_id: None };
+        return FrontApp {
+            name: None,
+            bundle_id: None,
+        };
     }
     if is_macos {
         if let Some(open) = trimmed.rfind(" (") {
@@ -207,7 +210,10 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
             }
         }
     }
-    FrontApp { name: Some(trimmed.to_string()), bundle_id: None }
+    FrontApp {
+        name: Some(trimmed.to_string()),
+        bundle_id: None,
+    }
 }
 
 /// `split_front_app_label` 的 `Option` 便捷版，平台开关收敛在这一处：
@@ -216,7 +222,10 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label
         .map(|l| split_front_app_label(l, cfg!(target_os = "macos")))
-        .unwrap_or(FrontApp { name: None, bundle_id: None })
+        .unwrap_or(FrontApp {
+            name: None,
+            bundle_id: None,
+        })
 }
 
 /// 概览页活动统计的单日汇总（date = 本地日期 YYYY-MM-DD）。
@@ -1171,6 +1180,9 @@ pub struct UserPreferences {
     /// Android: 1x1 non-interactive overlay to keep the process alive.
     #[serde(default)]
     pub android_single_pixel_keepalive: bool,
+    /// Android: 常驻通知/前台服务保活，默认开启。
+    #[serde(default = "default_true")]
+    pub android_notification_keepalive: bool,
 }
 
 impl UserPreferences {
@@ -1408,6 +1420,8 @@ struct UserPreferencesWire {
     android_overlay_size_dp: u32,
     #[serde(default)]
     android_single_pixel_keepalive: bool,
+    #[serde(default = "default_true")]
+    android_notification_keepalive: bool,
 }
 
 fn deserialize_selection_polish_hotkey<'de, D>(
@@ -1517,6 +1531,7 @@ impl Default for UserPreferencesWire {
             android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
             android_single_pixel_keepalive: prefs.android_single_pixel_keepalive,
+            android_notification_keepalive: prefs.android_notification_keepalive,
         }
     }
 }
@@ -1674,6 +1689,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.android_overlay_size_dp,
             ),
             android_single_pixel_keepalive: wire.android_single_pixel_keepalive,
+            android_notification_keepalive: wire.android_notification_keepalive,
         })
     }
 }
@@ -2486,6 +2502,7 @@ impl Default for UserPreferences {
             ),
             android_overlay_size_dp: default_android_overlay_size_dp(),
             android_single_pixel_keepalive: false,
+            android_notification_keepalive: true,
         }
     }
 }
@@ -3230,7 +3247,10 @@ mod split_front_app_label_tests {
     fn macos_label_splits_into_name_and_bundle() {
         let split = split_front_app_label("Claude (com.anthropic.claudefordesktop)", true);
         assert_eq!(split.name.as_deref(), Some("Claude"));
-        assert_eq!(split.bundle_id.as_deref(), Some("com.anthropic.claudefordesktop"));
+        assert_eq!(
+            split.bundle_id.as_deref(),
+            Some("com.anthropic.claudefordesktop")
+        );
     }
 
     #[test]
@@ -3254,7 +3274,11 @@ mod split_front_app_label_tests {
             "卸载 (2.4.1)",
         ] {
             let split = split_front_app_label(title, false);
-            assert_eq!(split.name.as_deref(), Some(title), "{title} should stay intact");
+            assert_eq!(
+                split.name.as_deref(),
+                Some(title),
+                "{title} should stay intact"
+            );
             assert_eq!(split.bundle_id, None, "{title} has no bundle id");
         }
     }
@@ -3270,23 +3294,38 @@ mod split_front_app_label_tests {
     fn blank_input_yields_nothing() {
         assert_eq!(
             split_front_app_label("", true),
-            FrontApp { name: None, bundle_id: None }
+            FrontApp {
+                name: None,
+                bundle_id: None
+            }
         );
         assert_eq!(
             split_front_app_label("   ", true),
-            FrontApp { name: None, bundle_id: None }
+            FrontApp {
+                name: None,
+                bundle_id: None
+            }
         );
         assert_eq!(
             split_front_app_label("", false),
-            FrontApp { name: None, bundle_id: None }
+            FrontApp {
+                name: None,
+                bundle_id: None
+            }
         );
         assert_eq!(
             split_front_app_label("   ", false),
-            FrontApp { name: None, bundle_id: None }
+            FrontApp {
+                name: None,
+                bundle_id: None
+            }
         );
         assert_eq!(
             split_front_app_opt(None),
-            FrontApp { name: None, bundle_id: None }
+            FrontApp {
+                name: None,
+                bundle_id: None
+            }
         );
     }
 }

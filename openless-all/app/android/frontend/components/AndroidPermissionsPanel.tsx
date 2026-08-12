@@ -7,17 +7,23 @@ import type { UserPreferences } from '../../../src/lib/types';
 import { Btn, Pill } from '../../../src/pages/_atoms';
 import { SettingRow } from '../../../src/pages/settings/shared';
 import {
+  getAndroidKeepaliveStatus,
   getAndroidAccessibilityStatus,
   getAndroidOverlayStatus,
   getAndroidShizukuStatus,
+  openAndroidBatterySettings,
+  openAndroidNotificationSettings,
   openShizukuApp,
   recoverAndroidAccessibility,
   requestAndroidAccessibilityPermission,
   requestAndroidOverlayPermission,
   requestAndroidShizukuPermission,
+  restartAndroidKeepalive,
+  runAndroidKeepaliveSelfTest,
 } from '../lib/androidIpc';
 import type {
   AndroidAccessibilityStatus,
+  AndroidKeepaliveStatus,
   AndroidInsertStrategy,
   AndroidOverlayActivationMode,
   AndroidOverlayCancelSwipeDirection,
@@ -43,6 +49,7 @@ function pickAndroidPrefs(settings: UserPreferences): AndroidPrefsSlice {
     androidOverlayCancelSwipeDirection: settings.androidOverlayCancelSwipeDirection,
     androidOverlaySizeDp: settings.androidOverlaySizeDp,
     androidSinglePixelKeepalive: settings.androidSinglePixelKeepalive,
+    androidNotificationKeepalive: settings.androidNotificationKeepalive,
   };
 }
 
@@ -75,6 +82,7 @@ interface AndroidPermissionsPanelProps {
 export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPanelProps) {
   const { t } = useTranslation();
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
+  const [keepaliveStatus, setKeepaliveStatus] = useState<AndroidKeepaliveStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
   const [androidShizuku, setAndroidShizuku] = useState<AndroidShizukuStatus | null>(null);
   const [shizukuRecoveryMessageKey, setShizukuRecoveryMessageKey] = useState<string | null>(null);
@@ -86,15 +94,19 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const sizePendingRef = useRef(false);
 
   const refreshAndroid = async () => {
-    const [overlayResult, accessibilityResult, shizukuResult, settingsResult] =
+    const [overlayResult, keepaliveResult, accessibilityResult, shizukuResult, settingsResult] =
       await Promise.allSettled([
         getAndroidOverlayStatus(),
+        getAndroidKeepaliveStatus(),
         getAndroidAccessibilityStatus(),
         getAndroidShizukuStatus(),
         getSettings(),
       ]);
     if (overlayResult.status === 'fulfilled') {
       setAndroidOverlay(overlayResult.value);
+    }
+    if (keepaliveResult.status === 'fulfilled') {
+      setKeepaliveStatus(keepaliveResult.value);
     }
     if (accessibilityResult.status === 'fulfilled') {
       setAndroidAccessibility(accessibilityResult.value);
@@ -517,8 +529,75 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
           </span>
         </div>
       </SettingRow>
+      <SettingRow label={t('settings.permissions.androidNotificationKeepaliveLabel')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={androidPrefs?.androidNotificationKeepalive ?? true}
+              onChange={(event) => { void updateAndroidPref('androidNotificationKeepalive', event.target.checked); }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
+              {t('settings.permissions.androidNotificationKeepaliveEnabled')}
+            </span>
+          </label>
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+            {t('settings.permissions.androidNotificationKeepaliveHint')}
+          </span>
+        </div>
+      </SettingRow>
+      <SettingRow label={t('settings.permissions.androidKeepaliveStatusLabel')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%', minWidth: 0 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+            <AndroidKeepaliveStatusPill status={keepaliveStatus} />
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={() => { void restartAndroidKeepalive().then(refreshAndroid); }}
+            >
+              {t('settings.permissions.androidKeepaliveRestart')}
+            </Btn>
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={() => { void runAndroidKeepaliveSelfTest().then(refreshAndroid); }}
+            >
+              {t('settings.permissions.androidKeepaliveSelfTest')}
+            </Btn>
+            {keepaliveStatus?.notificationKeepaliveEnabled
+              && keepaliveStatus?.notificationPermissionGranted === false && (
+              <Btn
+                variant="ghost"
+                size="sm"
+                onClick={() => { void openAndroidNotificationSettings(); }}
+              >
+                {t('settings.permissions.androidKeepaliveOpenNotification')}
+              </Btn>
+            )}
+            {keepaliveStatus?.batteryOptimizationRestricted && (
+              <Btn
+                variant="ghost"
+                size="sm"
+                onClick={() => { void openAndroidBatterySettings(); }}
+              >
+                {t('settings.permissions.androidKeepaliveOpenBattery')}
+              </Btn>
+            )}
+          </div>
+          {keepaliveStatus?.lastError && (
+            <span style={{ fontSize: 11, color: 'var(--ol-danger)', maxWidth: 300, textAlign: 'right' }}>
+              {keepaliveStatus.lastError}
+            </span>
+          )}
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', maxWidth: 300, textAlign: 'right' }}>
+            {t('settings.permissions.androidKeepaliveStatusHint', {
+              lastCheckAt: keepaliveStatus?.lastCheckAt ?? '—',
+            })}
+          </span>
+        </div>
+      </SettingRow>
       </>
-      )}
+    )}
     </>
   );
 }
@@ -530,6 +609,18 @@ function AndroidOverlayStatusPill({ status }: { status: AndroidOverlayStatus | n
     return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
   }
   return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
+}
+
+function AndroidKeepaliveStatusPill({ status }: { status: AndroidKeepaliveStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  if (status.lanServerRunning && status.foregroundServiceRunning) {
+    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.androidKeepaliveRunning')}</Pill>;
+  }
+  if (status.lanServerRunning) {
+    return <Pill tone="outline">{t('settings.permissions.androidKeepaliveLanOnly')}</Pill>;
+  }
+  return <Pill tone="outline">{t('settings.permissions.androidKeepaliveStopped')}</Pill>;
 }
 
 function AndroidAccessibilityStatusPill({ status }: { status: AndroidAccessibilityStatus | null }) {
