@@ -17,7 +17,7 @@ OpenLess 是一个语音输入 / 听写工具，核心目标是“说话 → 本
 
 ## 2. 当前仓库状态
 
-- 本地工作区位于 `/home/yangxc/OpenLess-src`；
+- 本地工作区位于 `/home/yangxc/Agent/OpenLess/repo/OpenLess-src`；
 - 本地 `beta` 分支与 fork 的 `beta` 分支已同步；
 - 最近已推送提交：
   - `e84c528e`：Android 通知保活 + 后端自恢复 + 保活诊断；
@@ -41,14 +41,14 @@ OpenLess 是一个语音输入 / 听写工具，核心目标是“说话 → 本
 - GitHub Actions `Android APK (debug)` 构建成功；
 - 已生成 arm64 / armv7 / x86 / x86_64 四个 ABI 的 release APK；
 - arm64 安装包已下载到本地：
-  - `/home/yangxc/OpenLess-src/ci-artifacts/31560541850/OpenLess_1.3.16_arm64-v8a.apk`
+  - `/home/yangxc/Agent/OpenLess/artifacts/ci-artifacts/31560541850/OpenLess_1.3.16_arm64-v8a.apk`
 
 ## 4. 电脑端 remote-client 现状
 
 ### 部署方式
 
-- 二进制：`/home/yangxc/.local/bin/openless-remote-client`
-- 启动脚本：`/home/yangxc/.local/bin/openless-remote`
+- 二进制：`/home/yangxc/Agent/OpenLess/deploy/bin/openless-remote-client`
+- 启动脚本：`/home/yangxc/Agent/OpenLess/deploy/bin/openless-remote`
 - systemd 用户服务：`openless-remote.service`
 - 当前参数：`--auto-discover --hotkey RightAlt --toggle --fcitx`
 
