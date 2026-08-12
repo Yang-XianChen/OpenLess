@@ -294,11 +294,20 @@ jobs:
         working-directory: 'openless-all/remote-client'
         run: cargo build --release --target "${{ matrix.rust-target }}"
 
+      - name: Prepare release binary with asset name
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/client-bin"
+          cp "openless-all/remote-client/target/${{ matrix.rust-target }}/release/openless-remote-client" \
+            "$RUNNER_TEMP/client-bin/${{ matrix.asset-name }}"
+          chmod +x "$RUNNER_TEMP/client-bin/${{ matrix.asset-name }}"
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: remote-client-${{ matrix.asset-name }}
-          path: openless-all/remote-client/target/${{ matrix.rust-target }}/release/openless-remote-client
+          path: ${{ runner.temp }}/client-bin/${{ matrix.asset-name }}
           if-no-files-found: error
 
   publish-remote-client:
